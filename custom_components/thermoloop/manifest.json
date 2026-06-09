@@ -1,0 +1,12 @@
+{
+  "domain": "thermoloop",
+  "name": "ThermoLoop",
+  "documentation": "https://github.com/JocelynBe/SmartIRFork",
+  "dependencies": [],
+  "codeowners": ["@JocelynBe"],
+  "requirements": [],
+  "homeassistant": "2025.5.0",
+  "version": "0.1.0",
+  "config_flow": true,
+  "iot_class": "local_polling"
+}
