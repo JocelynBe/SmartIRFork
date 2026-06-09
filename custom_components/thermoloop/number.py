@@ -13,8 +13,8 @@ from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .contracts import MAX_SETPOINT, MIN_SETPOINT
-from .const import DOMAIN
+from custom_components.thermoloop.const import DOMAIN
+from custom_components.thermoloop.contracts import MAX_SETPOINT, MIN_SETPOINT
 
 _LOGGER = logging.getLogger(__name__)
 

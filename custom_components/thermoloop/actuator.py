@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from .contracts import ACCommand, Fan, Mode
+from custom_components.thermoloop.contracts import ACCommand, Fan, Mode
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant

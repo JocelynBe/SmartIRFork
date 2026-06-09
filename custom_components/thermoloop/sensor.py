@@ -14,7 +14,7 @@ from homeassistant.const import STATE_IDLE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import (
+from custom_components.thermoloop.const import (
     ATTR_ACTIVE_SENSOR,
     ATTR_ALGORITHM,
     ATTR_CURRENT_TEMP,

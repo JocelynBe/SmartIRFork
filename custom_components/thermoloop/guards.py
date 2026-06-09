@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .contracts import ACCommand, ControlInput, Decision, Mode
+from custom_components.thermoloop.contracts import ACCommand, ControlInput, Decision, Mode
 
 _FLIP_MODES = {Mode.COOL, Mode.HEAT}
 

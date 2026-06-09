@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .contracts import (
+from custom_components.thermoloop.contracts import (
     ACCommand,
     ControlInput,
     Fan,

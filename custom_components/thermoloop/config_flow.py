@@ -9,7 +9,7 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_NAME
 import voluptuous as vol
 
-from .const import DOMAIN
+from custom_components.thermoloop.const import DOMAIN
 
 DATA_SCHEMA = vol.Schema({
     vol.Required(CONF_NAME, default="ThermoLoop"): str,

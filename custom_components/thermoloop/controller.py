@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .algorithms import Algorithm
-from .contracts import ACCommand, ControlInput, ControlMode, Decision
-from .guards import GuardConfig, apply_guards
+from custom_components.thermoloop.algorithms import Algorithm
+from custom_components.thermoloop.contracts import ACCommand, ControlInput, ControlMode, Decision
+from custom_components.thermoloop.guards import GuardConfig, apply_guards
 
 
 @dataclass

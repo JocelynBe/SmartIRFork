@@ -6,15 +6,15 @@ from typing import TYPE_CHECKING
 
 from homeassistant.const import Platform
 
-from .actuator import Actuator
-from .const import (
+from custom_components.thermoloop.actuator import Actuator
+from custom_components.thermoloop.const import (
     CONF_CLIMATE_ENTITY,
     CONF_PRESENCE_TRACKER,
     CONF_TEMP_SENSOR_LIVING,
     DOMAIN,
 )
-from .control_loop import ControlLoop
-from .presence import PresenceTracker
+from custom_components.thermoloop.control_loop import ControlLoop
+from custom_components.thermoloop.presence import PresenceTracker
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry

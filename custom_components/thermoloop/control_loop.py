@@ -7,14 +7,14 @@ import logging
 
 from homeassistant.helpers.event import async_track_time_interval
 
-from .actuator import Actuator
-from .algorithms import get_algorithm
-from .const import EVENT_THERMOLOOP_COMMAND
-from .contracts import ACState, ControlInput, ControlMode, Fan, Mode
-from .controller import Controller
-from .guards import GuardConfig
-from .presence import PresenceTracker
-from .sensor import ThermoLoopStatusSensor
+from custom_components.thermoloop.actuator import Actuator
+from custom_components.thermoloop.algorithms import get_algorithm
+from custom_components.thermoloop.const import EVENT_THERMOLOOP_COMMAND
+from custom_components.thermoloop.contracts import ACState, ControlInput, ControlMode, Fan, Mode
+from custom_components.thermoloop.controller import Controller
+from custom_components.thermoloop.guards import GuardConfig
+from custom_components.thermoloop.presence import PresenceTracker
+from custom_components.thermoloop.sensor import ThermoLoopStatusSensor
 
 _LOGGER = logging.getLogger(__name__)
 
