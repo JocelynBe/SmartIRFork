@@ -1,61 +1,48 @@
-"""Actuator: the only HA-touching layer in the brain-to-AC pipeline.
+"""Actuator: sends AC commands via Broadlink IR.
 
-Translates a pure `ACCommand` into concrete `climate.*` service calls on
-the configured SmartIR climate entity.
+Translates a pure `ACCommand` into a raw IR code and sends it via
+`remote.send_command` on the configured Broadlink remote entity.
 """
 from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING
 
-from custom_components.thermoloop.contracts import ACCommand, Fan, Mode
+from custom_components.thermoloop.contracts import ACCommand, ACState
+from custom_components.thermoloop.ir_codes import generate, generate_power_off
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
-_FAN_MAP = {
-    Fan.LOW: "low",
-    Fan.MID: "mid",
-    Fan.HIGH: "high",
-    Fan.HIGHEST: "highest",
-}
-
-_MODE_MAP = {
-    Mode.COOL: "cool",
-    Mode.HEAT: "heat",
-    Mode.DRY: "dry",
-}
-
 
 class Actuator:
-    """Sends discrete AC commands to a Home Assistant climate entity."""
+    """Sends AC commands via Broadlink IR remote entity."""
 
-    def __init__(self, hass: HomeAssistant, entity_id: str) -> None:
+    def __init__(self, hass: HomeAssistant, broadlink_entity_id: str) -> None:
         self._hass = hass
-        self._entity_id = entity_id
+        self._entity_id = broadlink_entity_id
+        self._last_state: ACState | None = None
+
+    @property
+    def last_state(self) -> ACState | None:
+        return self._last_state
 
     async def apply(self, cmd: ACCommand) -> None:
-        """Apply an ACCommand to the climate entity via service calls."""
-        if not cmd.power:
+        """Send an ACCommand via Broadlink remote."""
+        try:
+            code = generate_power_off() if not cmd.power else generate(cmd)
             await self._hass.services.async_call(
-                "climate", "turn_off",
-                {"entity_id": self._entity_id},
+                "remote", "send_command",
+                {"entity_id": self._entity_id, "command": [f"b64:{code}"]},
+                blocking=True,
             )
-            return
-
-        await self._hass.services.async_call(
-            "climate", "set_hvac_mode",
-            {"entity_id": self._entity_id, "hvac_mode": _MODE_MAP[cmd.mode]},
-        )
-        await self._hass.services.async_call(
-            "climate", "set_temperature",
-            {"entity_id": self._entity_id, "temperature": cmd.setpoint},
-        )
-        await self._hass.services.async_call(
-            "climate", "set_fan_mode",
-            {"entity_id": self._entity_id, "fan_mode": _FAN_MAP[cmd.fan]},
-        )
-
-        _LOGGER.debug("Sent: %s", cmd)
+            self._last_state = ACState(
+                power=cmd.power,
+                mode=cmd.mode,
+                setpoint=cmd.setpoint,
+                fan=cmd.fan,
+            )
+        except Exception:
+            _LOGGER.exception("Failed to send IR command via %s", self._entity_id)

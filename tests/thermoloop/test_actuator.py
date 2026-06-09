@@ -1,16 +1,17 @@
-"""Tests for the ThermoLoop actuator."""
-from unittest.mock import AsyncMock
+"""Tests for the ThermoLoop actuator (Broadlink direct IR)."""
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from custom_components.thermoloop.actuator import Actuator
-from custom_components.thermoloop.contracts import ACCommand, Fan, Mode
+from custom_components.thermoloop.contracts import ACCommand, ACState, Fan, Mode
 
 
 @pytest.fixture
 def mock_hass():
-    hass = AsyncMock()
-    hass.services.async_call = AsyncMock()
+    hass = MagicMock()
+    hass.services = MagicMock()
+    hass.services.async_call = AsyncMock(return_value=None)
     return hass
 
 
@@ -19,37 +20,43 @@ def _cmd(power=True, mode=Mode.COOL, setpoint=22, fan=Fan.LOW, reason="test") ->
 
 
 @pytest.mark.asyncio
-async def test_actuator_turn_off_calls_turn_off_service(mock_hass):
-    actuator = Actuator(mock_hass, "climate.my_ac")
+async def test_actuator_sends_remote_command(mock_hass):
+    actuator = Actuator(mock_hass, "remote.rm4_mini")
+    cmd = _cmd()
+    await actuator.apply(cmd)
+    mock_hass.services.async_call.assert_called_once()
+    args, _ = mock_hass.services.async_call.call_args
+    assert args[0] == "remote"
+    assert args[1] == "send_command"
+    assert args[2]["entity_id"] == "remote.rm4_mini"
+    assert "b64:" in args[2]["command"][0]
+    assert actuator.last_state == ACState(power=True, mode=Mode.COOL, setpoint=22, fan=Fan.LOW)
+
+
+@pytest.mark.asyncio
+async def test_actuator_power_off_sends_off_code(mock_hass):
+    actuator = Actuator(mock_hass, "remote.rm4_mini")
     cmd = _cmd(power=False)
     await actuator.apply(cmd)
-    mock_hass.services.async_call.assert_called_once_with(
-        "climate", "turn_off", {"entity_id": "climate.my_ac"}
-    )
+    mock_hass.services.async_call.assert_called_once()
+    args, _ = mock_hass.services.async_call.call_args
+    assert "b64:" in args[2]["command"][0]
 
 
 @pytest.mark.asyncio
-async def test_actuator_cool_mode_sets_hvac_mode(mock_hass):
-    actuator = Actuator(mock_hass, "climate.my_ac")
-    cmd = _cmd(power=True, mode=Mode.COOL, setpoint=18, fan=Fan.HIGH)
+async def test_actuator_uses_correct_broadlink_entity(mock_hass):
+    actuator = Actuator(mock_hass, "remote.living_room_ir")
+    cmd = _cmd()
     await actuator.apply(cmd)
-    assert mock_hass.services.async_call.call_count == 3
-    mock_hass.services.async_call.assert_any_call(
-        "climate", "set_hvac_mode", {"entity_id": "climate.my_ac", "hvac_mode": "cool"}
-    )
-    mock_hass.services.async_call.assert_any_call(
-        "climate", "set_temperature", {"entity_id": "climate.my_ac", "temperature": 18}
-    )
-    mock_hass.services.async_call.assert_any_call(
-        "climate", "set_fan_mode", {"entity_id": "climate.my_ac", "fan_mode": "high"}
-    )
+    args, _ = mock_hass.services.async_call.call_args
+    assert args[2]["entity_id"] == "remote.living_room_ir"
 
 
 @pytest.mark.asyncio
-async def test_actuator_power_on_does_not_turn_off(mock_hass):
-    actuator = Actuator(mock_hass, "climate.my_ac")
-    cmd = _cmd(power=True)
+async def test_actuator_error_does_not_raise(mock_hass):
+    mock_hass.services.async_call = AsyncMock(side_effect=Exception("service error"))
+    actuator = Actuator(mock_hass, "remote.rm4_mini")
+    cmd = _cmd()
+    # Should not raise — errors are logged
     await actuator.apply(cmd)
-    for call_args in mock_hass.services.async_call.call_args_list:
-        domain, service, _ = call_args[0]
-        assert not (domain == "climate" and service == "turn_off")
+    assert actuator.last_state is None
