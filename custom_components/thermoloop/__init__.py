@@ -9,6 +9,8 @@ from homeassistant.const import Platform
 from custom_components.thermoloop.actuator import Actuator
 from custom_components.thermoloop.const import (
     CONF_CLIMATE_ENTITY,
+    CONF_HUMIDITY_SENSOR_BEDROOM,
+    CONF_HUMIDITY_SENSOR_LIVING,
     CONF_PRESENCE_TRACKER,
     CONF_TEMP_SENSOR_BEDROOM,
     CONF_TEMP_SENSOR_LIVING,
@@ -43,6 +45,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     climate_entity_id: str = entry.data[CONF_CLIMATE_ENTITY]
     temp_sensor_day: str = entry.data[CONF_TEMP_SENSOR_LIVING]
     temp_sensor_night: str = entry.data[CONF_TEMP_SENSOR_BEDROOM]
+    humidity_sensor_living: str | None = entry.data.get(CONF_HUMIDITY_SENSOR_LIVING)
+    humidity_sensor_bedroom: str | None = entry.data.get(CONF_HUMIDITY_SENSOR_BEDROOM)
     device_tracker_entities: list[str] = entry.data.get(CONF_PRESENCE_TRACKER, [])
 
     actuator = Actuator(hass, climate_entity_id)
@@ -73,6 +77,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         actuator=actuator,
         presence=presence,
         status_sensor=status_sensor,
+        humidity_sensor_day_entity_id=humidity_sensor_living,
+        humidity_sensor_night_entity_id=humidity_sensor_bedroom,
     )
     entry_data["control_loop"] = control_loop
 

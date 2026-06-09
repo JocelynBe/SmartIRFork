@@ -56,6 +56,8 @@ def _build_loop(mock_hass, mock_actuator, mock_sensor, mock_presence, entry_id="
         actuator=mock_actuator,
         presence=mock_presence,
         status_sensor=mock_sensor,
+        humidity_sensor_day_entity_id=None,
+        humidity_sensor_night_entity_id=None,
     )
 
 

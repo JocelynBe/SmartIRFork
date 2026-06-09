@@ -18,6 +18,7 @@ from custom_components.thermoloop.const import (
     ATTR_ACTIVE_SENSOR,
     ATTR_ALGORITHM,
     ATTR_CURRENT_TEMP,
+    ATTR_HUMIDITY,
     ATTR_MODE,
     ATTR_REASON,
     ATTR_TARGET,
@@ -66,6 +67,7 @@ class ThermoLoopStatusSensor(SensorEntity):
         target: float | None = None,
         active_sensor: str | None = None,
         current_temp: float | None = None,
+        humidity: float | None = None,
         reason: str | None = None,
     ) -> None:
         """Update the sensor state and attributes."""
@@ -81,6 +83,8 @@ class ThermoLoopStatusSensor(SensorEntity):
             attrs[ATTR_ACTIVE_SENSOR] = active_sensor
         if current_temp is not None:
             attrs[ATTR_CURRENT_TEMP] = current_temp
+        if humidity is not None:
+            attrs[ATTR_HUMIDITY] = humidity
         if reason is not None:
             attrs[ATTR_REASON] = reason
         self._attributes = attrs

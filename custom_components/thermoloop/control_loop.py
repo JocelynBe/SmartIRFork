@@ -50,6 +50,8 @@ class ControlLoop:
         actuator: Actuator,
         presence: PresenceTracker,
         status_sensor: ThermoLoopStatusSensor,
+        humidity_sensor_day_entity_id: str | None = None,
+        humidity_sensor_night_entity_id: str | None = None,
     ) -> None:
         self._hass = hass
         self._entry_id = entry_id
@@ -60,6 +62,9 @@ class ControlLoop:
         self._actuator = actuator
         self._presence = presence
         self._status_sensor = status_sensor
+        self._humidity_day = humidity_sensor_day_entity_id
+        self._humidity_night = humidity_sensor_night_entity_id
+        self._current_humidity: float | None = None
         self._controller = Controller(
             algorithm=get_algorithm("v0"), guards=GuardConfig()
         )
@@ -118,6 +123,7 @@ class ControlLoop:
                     target=ci.target,
                     active_sensor=self._active_sensor_id,
                     current_temp=ci.current_temp,
+                    humidity=self._current_humidity,
                     reason=cmd.reason,
                 )
             else:
@@ -171,6 +177,18 @@ class ControlLoop:
             current_temp = float(temp_state.state)
         except (ValueError, TypeError):
             return None
+
+        # Read humidity from phase-appropriate sensor
+        humidity_entity = self._humidity_night if is_night else self._humidity_day
+        current_humidity: float | None = None
+        if humidity_entity is not None:
+            h_state = self._hass.states.get(humidity_entity)
+            if h_state is not None and h_state.state not in ("unknown", "unavailable", "", None):
+                try:
+                    current_humidity = float(h_state.state)
+                except (ValueError, TypeError):
+                    pass
+        self._current_humidity = current_humidity
 
         sensor_last_updated = getattr(temp_state, "last_updated", None)
         if sensor_last_updated is not None:

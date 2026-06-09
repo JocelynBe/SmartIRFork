@@ -53,3 +53,10 @@ async def test_update_state_partial_does_not_set_unprovided_attributes(mock_hass
     assert "reason" in attrs
     assert "mode" not in attrs
     assert "target" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_update_state_with_humidity(mock_hass):
+    sensor = ThermoLoopStatusSensor(mock_hass, "entry_id")
+    await sensor.update_state("active", mode="cool", humidity=55.0, reason="test")
+    assert sensor.extra_state_attributes.get("humidity") == 55.0

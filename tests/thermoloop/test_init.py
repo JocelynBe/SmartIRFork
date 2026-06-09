@@ -6,6 +6,7 @@ import pytest
 from custom_components.thermoloop.const import (
     CONF_CLIMATE_ENTITY,
     CONF_PRESENCE_TRACKER,
+    CONF_TEMP_SENSOR_BEDROOM,
     CONF_TEMP_SENSOR_LIVING,
     DOMAIN,
 )
@@ -32,6 +33,7 @@ def mock_entry():
     entry.data = {
         CONF_CLIMATE_ENTITY: "climate.my_ac",
         CONF_TEMP_SENSOR_LIVING: "sensor.room_temp",
+        CONF_TEMP_SENSOR_BEDROOM: "sensor.bedroom_temp",
         CONF_PRESENCE_TRACKER: ["device_tracker.phone1"],
     }
     return entry
