@@ -1,0 +1,205 @@
+"""Control loop: periodic tick that orchestrates sensor reads, brain algorithm, actuator, and status update."""
+
+from __future__ import annotations
+
+import datetime as dt
+import logging
+
+from .actuator import Actuator
+from .algorithms import get_algorithm
+from .const import (
+    ATTR_ACTIVE_SENSOR,
+    ATTR_ALGORITHM,
+    ATTR_CURRENT_TEMP,
+    ATTR_MODE,
+    ATTR_REASON,
+    ATTR_TARGET,
+)
+from .contracts import ACCommand, ACState, ControlInput, ControlMode, Fan, Mode
+from .controller import Controller
+from .guards import GuardConfig
+from .presence import PresenceTracker
+from .sensor import ThermoLoopStatusSensor
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _night_window_active(now, start_str, end_str):
+    """Check if current time falls within the night window (supports wrap past midnight)."""
+    if not start_str or not end_str:
+        return False
+    try:
+        start = dt.time.fromisoformat(start_str)
+        end = dt.time.fromisoformat(end_str)
+    except (ValueError, TypeError):
+        return False
+    current = now.time()
+    if start <= end:
+        return start <= current < end
+    return current >= start or current < end
+
+
+class ControlLoop:
+    """Periodic control tick orchestrating algorithm -> guard -> actuator -> sensor."""
+
+    def __init__(
+        self,
+        hass,
+        entry_id: str,
+        climate_entity_id: str,
+        temp_sensor_entity_id: str,
+        actuator: Actuator,
+        presence: PresenceTracker,
+        status_sensor: ThermoLoopStatusSensor,
+    ) -> None:
+        self._hass = hass
+        self._entry_id = entry_id
+        self._climate_entity_id = climate_entity_id
+        self._temp_sensor_entity_id = temp_sensor_entity_id
+        self._actuator = actuator
+        self._presence = presence
+        self._status_sensor = status_sensor
+        self._controller = Controller(
+            algorithm=get_algorithm("v0"), guards=GuardConfig()
+        )
+        self._algo_name: str = "v0"
+
+    def _now(self):
+        """Return current datetime. Override in tests to control time."""
+        return dt.datetime.now()
+
+    async def async_tick(self) -> None:
+        """Execute one full control cycle."""
+        try:
+            ci = self._build_input()
+            if ci is None:
+                self._status_sensor.update_state("error", reason="incomplete_context")
+                return
+
+            decision = self._controller.decide(ci)
+
+            if decision.is_send:
+                cmd = decision.command
+                await self._actuator.apply(cmd)
+                self._status_sensor.update_state(
+                    "active" if cmd.power else "off",
+                    mode=ci.mode.value,
+                    algorithm=self._algo_name,
+                    target=ci.target,
+                    active_sensor=self._temp_sensor_entity_id,
+                    current_temp=ci.current_temp,
+                    reason=cmd.reason,
+                )
+            else:
+                self._status_sensor.update_state(
+                    "idle",
+                    mode=ci.mode.value,
+                    algorithm=self._algo_name,
+                    reason=decision.reason,
+                )
+        except Exception:
+            _LOGGER.exception("Control tick failed")
+            self._status_sensor.update_state("error", reason="exception")
+
+    def _build_input(self):
+        """Read HA entity states and build a ControlInput for the brain."""
+        temp_state = self._hass.states.get(self._temp_sensor_entity_id)
+        if temp_state is None or temp_state.state in (
+            "unknown",
+            "unavailable",
+            "",
+            None,
+        ):
+            return None
+        try:
+            current_temp = float(temp_state.state)
+        except (ValueError, TypeError):
+            return None
+
+        climate = self._hass.states.get(self._climate_entity_id)
+        if climate is None or climate.state in ("unknown", "unavailable", "", None):
+            return None
+
+        attrs = climate.attributes
+        hvac_mode = attrs.get("hvac_mode") or climate.state
+        setpoint = int(attrs.get("temperature", 22))
+        fan_str = attrs.get("fan_mode", "low")
+
+        mode_map = {"cool": Mode.COOL, "heat": Mode.HEAT, "dry": Mode.DRY}
+        fan_map = {
+            "low": Fan.LOW,
+            "mid": Fan.MID,
+            "high": Fan.HIGH,
+            "highest": Fan.HIGHEST,
+        }
+
+        assumed = ACState(
+            power=hvac_mode not in ("off",),
+            mode=mode_map.get(hvac_mode, Mode.COOL),
+            setpoint=setpoint,
+            fan=fan_map.get(fan_str, Fan.LOW),
+        )
+
+        day_target = self._read_target(
+            f"number.thermoloop_target_day_{self._entry_id}", 22.0
+        )
+        night_target = self._read_target(
+            f"number.thermoloop_target_night_{self._entry_id}", 24.0
+        )
+
+        night_start = self._read_entity(
+            f"time.thermoloop_night_start_{self._entry_id}"
+        )
+        night_end = self._read_entity(
+            f"time.thermoloop_night_end_{self._entry_id}"
+        )
+
+        is_night = _night_window_active(self._now(), night_start, night_end)
+        is_away = self._presence.is_away
+        target = night_target if (is_night and is_away) else day_target
+
+        mode_str = self._read_entity(
+            f"select.thermoloop_mode_{self._entry_id}", "auto"
+        )
+        cm_map = {
+            "auto": ControlMode.AUTO,
+            "off": ControlMode.OFF,
+            "away": ControlMode.AWAY,
+        }
+        control_mode = cm_map.get(mode_str, ControlMode.AUTO)
+
+        algo_str = self._read_entity(
+            f"select.thermoloop_algorithm_{self._entry_id}", "v0"
+        )
+        try:
+            self._controller.algorithm = get_algorithm(algo_str)
+            self._algo_name = algo_str
+        except ValueError:
+            self._controller.algorithm = get_algorithm("v0")
+            self._algo_name = "v0"
+
+        return ControlInput(
+            now=self._now().timestamp(),
+            mode=control_mode,
+            current_temp=current_temp,
+            sensor_age=1.0,
+            target=target,
+            assumed_state=assumed,
+            temp_trend=0.0,
+            last_command_at=None,
+        )
+
+    def _read_entity(self, entity_id, default=None):
+        """Read an entity's state string, returning default on missing."""
+        state = self._hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable", "", None):
+            return default
+        return state.state
+
+    def _read_target(self, entity_id, default):
+        """Read a number entity as float."""
+        raw = self._read_entity(entity_id, str(default))
+        try:
+            return float(raw)
+        except (ValueError, TypeError):
+            return default
