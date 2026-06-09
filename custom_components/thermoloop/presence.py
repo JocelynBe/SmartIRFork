@@ -1,6 +1,6 @@
 """Event-driven presence tracker for ThermoLoop.
 
-Listens to device_tracker state changes via async_track_state_change
+Listens to device_tracker state changes via async_track_state_change_event
 and fires a callback when presence transitions (home -> away, away -> home).
 """
 from __future__ import annotations
@@ -9,7 +9,7 @@ import logging
 from typing import Callable
 
 from homeassistant.core import HomeAssistant, State
-from homeassistant.helpers.event import async_track_state_change
+from homeassistant.helpers.event import async_track_state_change_event
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,17 +31,14 @@ class PresenceTracker:
 
         if callback is not None:
             for eid in client_ids:
-                unsub = async_track_state_change(
-                    hass, eid, self._handle_state_change
+                unsub = async_track_state_change_event(
+                    hass, [eid], self._handle_state_change
                 )
                 self._unsubs.append(unsub)
 
-    def _handle_state_change(
-        self,
-        entity_id: str,
-        old_state: State | None,
-        new_state: State | None,
-    ) -> None:
+    def _handle_state_change(self, event) -> None:
+        data = event.data
+        new_state: State | None = data.get("new_state")
         if new_state is None:
             return
         now_away = self._compute_away()

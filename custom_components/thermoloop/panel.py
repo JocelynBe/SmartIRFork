@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 
+from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
 
@@ -23,7 +24,7 @@ async def async_register_panel(hass: HomeAssistant) -> None:
         StaticPathConfig(_PANEL_URL, www_path, True),
     ])
 
-    await hass.components.panel_custom.async_register_panel(
+    await panel_custom.async_register_panel(
         hass=hass,
         frontend_url_path="thermoloop",
         webcomponent_name="thermoloop-panel",
@@ -40,6 +41,6 @@ async def async_register_panel(hass: HomeAssistant) -> None:
 async def async_remove_panel(hass: HomeAssistant) -> None:
     """Remove the ThermoLoop sidebar panel."""
     try:
-        hass.components.frontend.async_remove_panel("thermoloop")
+        await frontend.async_remove_panel(hass, "thermoloop")
     except Exception:
         _LOGGER.debug("Could not remove panel (may already be gone)")

@@ -54,6 +54,7 @@ def _mock_track_time_interval(hass, callback, interval):
     return MagicMock()
 
 ha_mod.helpers.event.async_track_state_change = MagicMock(return_value=MagicMock())
+ha_mod.helpers.event.async_track_state_change_event = MagicMock(return_value=MagicMock())
 ha_mod.helpers.event.async_track_time_interval = _mock_track_time_interval
 
 ha_mod.helpers.selector = types.ModuleType("homeassistant.helpers.selector")
@@ -66,6 +67,7 @@ ha_mod.components.http = types.ModuleType("homeassistant.components.http")
 ha_mod.components.http.StaticPathConfig = MagicMock()
 
 ha_mod.components.frontend = types.ModuleType("homeassistant.components.frontend")
+ha_mod.components.frontend.async_remove_panel = AsyncMock()
 
 ha_mod.components.panel_custom = types.ModuleType("homeassistant.components.panel_custom")
 ha_mod.components.panel_custom.async_register_panel = AsyncMock()

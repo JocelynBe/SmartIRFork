@@ -1,5 +1,5 @@
 """Tests for ThermoLoop __init__ wiring."""
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -25,11 +25,6 @@ def mock_hass():
     hass.bus.async_fire = MagicMock()
     hass.http = MagicMock()
     hass.http.async_register_static_paths = AsyncMock(return_value=None)
-    hass.components = MagicMock()
-    hass.components.frontend = MagicMock()
-    hass.components.frontend.async_remove_panel = MagicMock()
-    hass.components.panel_custom = MagicMock()
-    hass.components.panel_custom.async_register_panel = AsyncMock()
     return hass
 
 
