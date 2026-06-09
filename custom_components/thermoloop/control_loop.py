@@ -172,6 +172,12 @@ class ControlLoop:
         except (ValueError, TypeError):
             return None
 
+        sensor_last_updated = getattr(temp_state, "last_updated", None)
+        if sensor_last_updated is not None:
+            sensor_age = (now - sensor_last_updated).total_seconds()
+        else:
+            sensor_age = 0.0
+
         self._temp_history.append((now.timestamp(), current_temp))
         self._temp_history = self._temp_history[-_TREND_WINDOW:]
 
@@ -234,7 +240,7 @@ class ControlLoop:
             now=now.timestamp(),
             mode=control_mode,
             current_temp=current_temp,
-            sensor_age=1.0,
+            sensor_age=sensor_age,
             target=target,
             assumed_state=assumed,
             temp_trend=self._compute_trend(),

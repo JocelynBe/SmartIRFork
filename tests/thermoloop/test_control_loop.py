@@ -1,7 +1,9 @@
 """Tests for ThermoLoop control loop integration."""
 
 import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 import pytest
 
@@ -164,3 +166,31 @@ async def test_async_tick_uses_night_sensor_during_night(mock_hass, mock_actuato
     # Error = 28 - 24 = +4.0 -> slam cool -> setpoint = MIN_SETPOINT (16)
     cmd = mock_actuator.apply.call_args[0][0]
     assert cmd.setpoint == 16
+
+
+@pytest.mark.asyncio
+async def test_async_tick_reports_sensor_age(mock_hass, mock_actuator, mock_sensor, mock_presence):
+    """Sensor age should be computed from last_updated."""
+    now = datetime.datetime(2024, 6, 15, 12, 0, 0)
+    old = datetime.datetime(2024, 6, 15, 11, 50, 0)  # 600s ago
+
+    def get_state(eid):
+        if eid == "sensor.room_temp":
+            s = _state("sensor.room_temp", "26.5")
+            s.last_updated = old
+            return s
+        if eid == "climate.my_ac":
+            s = _state("climate.my_ac", "cool",
+                       {"hvac_mode": "cool", "temperature": 22, "fan_mode": "low"})
+            s.last_updated = now
+            return s
+        return _state(eid, "auto" if "select" in eid else "22")
+    mock_hass.states.get.side_effect = get_state
+
+    loop = _build_loop(mock_hass, mock_actuator, mock_sensor, mock_presence)
+    loop._now = lambda: now
+
+    with patch.object(loop._controller, 'decide', wraps=loop._controller.decide) as spy:
+        await loop.async_tick()
+        ci = spy.call_args[0][0]
+        assert ci.sensor_age == 600.0
