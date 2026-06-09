@@ -9,7 +9,7 @@ from homeassistant.const import Platform
 from custom_components.thermoloop.actuator import Actuator
 from custom_components.thermoloop.panel import async_register_panel, async_remove_panel
 from custom_components.thermoloop.const import (
-    CONF_CLIMATE_ENTITY,
+    CONF_BROADLINK_REMOTE,
     CONF_HUMIDITY_SENSOR_BEDROOM,
     CONF_HUMIDITY_SENSOR_LIVING,
     CONF_PRESENCE_TRACKER,
@@ -43,14 +43,14 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up ThermoLoop from a config entry."""
-    climate_entity_id: str = entry.data[CONF_CLIMATE_ENTITY]
+    broadlink_remote_id: str = entry.data[CONF_BROADLINK_REMOTE]
     temp_sensor_day: str = entry.data[CONF_TEMP_SENSOR_LIVING]
     temp_sensor_night: str = entry.data[CONF_TEMP_SENSOR_BEDROOM]
     humidity_sensor_living: str | None = entry.data.get(CONF_HUMIDITY_SENSOR_LIVING)
     humidity_sensor_bedroom: str | None = entry.data.get(CONF_HUMIDITY_SENSOR_BEDROOM)
     device_tracker_entities: list[str] = entry.data.get(CONF_PRESENCE_TRACKER, [])
 
-    actuator = Actuator(hass, climate_entity_id)
+    actuator = Actuator(hass, broadlink_remote_id)
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {}
@@ -65,7 +65,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     control_loop = ControlLoop(
         hass=hass,
         entry_id=entry.entry_id,
-        climate_entity_id=climate_entity_id,
+        climate_entity_id=broadlink_remote_id,
         temp_sensor_day_entity_id=temp_sensor_day,
         temp_sensor_night_entity_id=temp_sensor_night,
         actuator=actuator,

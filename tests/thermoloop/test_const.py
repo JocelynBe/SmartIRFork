@@ -1,4 +1,4 @@
-from custom_components.thermoloop.const import DOMAIN, CONF_CLIMATE_ENTITY
+from custom_components.thermoloop.const import DOMAIN, CONF_BROADLINK_REMOTE
 
 
 def test_domain_is_thermoloop():
@@ -6,4 +6,4 @@ def test_domain_is_thermoloop():
 
 
 def test_config_keys_are_defined():
-    assert CONF_CLIMATE_ENTITY == "climate_entity"
+    assert CONF_BROADLINK_REMOTE == "broadlink_remote"

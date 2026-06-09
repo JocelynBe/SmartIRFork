@@ -3,7 +3,7 @@ from __future__ import annotations
 
 DOMAIN = "thermoloop"
 
-CONF_CLIMATE_ENTITY = "climate_entity"
+CONF_BROADLINK_REMOTE = "broadlink_remote"
 CONF_TEMP_SENSOR_LIVING = "temperature_sensor_living"
 CONF_TEMP_SENSOR_BEDROOM = "temperature_sensor_bedroom"
 CONF_HUMIDITY_SENSOR_LIVING = "humidity_sensor_living"

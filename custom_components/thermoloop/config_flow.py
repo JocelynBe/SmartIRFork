@@ -1,6 +1,6 @@
 """Config flow for ThermoLoop.
 
-Entity selector config flow. User picks climate entity, day/night
+Entity selector config flow. User picks Broadlink remote entity, day/night
 temperature sensors, optional humidity sensors, and presence trackers.
 """
 from __future__ import annotations
@@ -11,7 +11,7 @@ from homeassistant.helpers import selector
 import voluptuous as vol
 
 from custom_components.thermoloop.const import (
-    CONF_CLIMATE_ENTITY,
+    CONF_BROADLINK_REMOTE,
     CONF_HUMIDITY_SENSOR_BEDROOM,
     CONF_HUMIDITY_SENSOR_LIVING,
     CONF_PRESENCE_TRACKER,
@@ -22,8 +22,8 @@ from custom_components.thermoloop.const import (
 
 DATA_SCHEMA = vol.Schema({
     vol.Required(CONF_NAME, default="ThermoLoop"): str,
-    vol.Required(CONF_CLIMATE_ENTITY): selector.EntitySelector(
-        selector.EntitySelectorConfig(domain="climate")
+    vol.Required(CONF_BROADLINK_REMOTE): selector.EntitySelector(
+        selector.EntitySelectorConfig(domain="remote")
     ),
     vol.Required(CONF_TEMP_SENSOR_LIVING): selector.EntitySelector(
         selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
