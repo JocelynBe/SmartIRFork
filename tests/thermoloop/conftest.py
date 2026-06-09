@@ -23,6 +23,7 @@ ha_mod.const.UnitOfTemperature.CELSIUS = "°C"
 
 ha_mod.core = types.ModuleType("homeassistant.core")
 ha_mod.core.HomeAssistant = MagicMock
+ha_mod.core.State = MagicMock
 
 ha_mod.config_entries = types.ModuleType("homeassistant.config_entries")
 ha_mod.config_entries.ConfigEntry = MagicMock

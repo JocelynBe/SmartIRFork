@@ -44,7 +44,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     device_tracker_entities: list[str] = entry.data.get(CONF_PRESENCE_TRACKER, [])
 
     actuator = Actuator(hass, climate_entity_id)
-    presence = PresenceTracker(hass, device_tracker_entities)
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {}
@@ -55,6 +54,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Retrieve status sensor stored by sensor platform
     entry_data = hass.data[DOMAIN][entry.entry_id]
     status_sensor: ThermoLoopStatusSensor | None = entry_data.get("status_sensor")
+
+    # Event-driven presence: callback fires control_loop.async_tick on transition
+    async def _on_presence(transition: str) -> None:
+        await control_loop.async_tick()
+
+    presence = PresenceTracker(hass, device_tracker_entities, _on_presence)
+    entry_data["presence"] = presence
 
     control_loop = ControlLoop(
         hass=hass,
@@ -85,6 +91,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     control_loop = entry_data.get("control_loop")
     if control_loop is not None:
         control_loop.stop()
+    presence = entry_data.get("presence")
+    if presence is not None:
+        presence.stop()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
