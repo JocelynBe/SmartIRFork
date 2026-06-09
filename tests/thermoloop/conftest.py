@@ -150,8 +150,60 @@ class MockNumberEntity:
     def native_unit_of_measurement(self, value):
         self._attr_native_unit_of_measurement = value
 
+# Build a minimal SelectEntity base class
+class MockSelectEntity:
+    _attr_has_entity_name = False
+    _attr_unique_id = None
+    _attr_name = None
+    _attr_current_option = None
+    _attr_options = None
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def async_write_ha_state(self):
+        pass
+
+    def async_select_option(self, option: str) -> None:
+        self._attr_current_option = option
+
+    @property
+    def unique_id(self):
+        return self._attr_unique_id
+
+    @unique_id.setter
+    def unique_id(self, value):
+        self._attr_unique_id = value
+
+    @property
+    def name(self):
+        return self._attr_name
+
+    @name.setter
+    def name(self, value):
+        self._attr_name = value
+
+    @property
+    def current_option(self):
+        return self._attr_current_option
+
+    @current_option.setter
+    def current_option(self, value):
+        self._attr_current_option = value
+
+    @property
+    def options(self):
+        return self._attr_options
+
+    @options.setter
+    def options(self, value):
+        self._attr_options = value
+
 ha_mod.components.number = types.ModuleType("homeassistant.components.number")
 ha_mod.components.number.NumberEntity = MockNumberEntity
+
+ha_mod.components.select = types.ModuleType("homeassistant.components.select")
+ha_mod.components.select.SelectEntity = MockSelectEntity
 
 # Inject into sys.modules
 sys.modules["homeassistant"] = ha_mod
@@ -163,4 +215,5 @@ sys.modules["homeassistant.helpers.entity_platform"] = ha_mod.helpers.entity_pla
 sys.modules["homeassistant.components"] = ha_mod.components
 sys.modules["homeassistant.components.sensor"] = ha_mod.components.sensor
 sys.modules["homeassistant.components.number"] = ha_mod.components.number
+sys.modules["homeassistant.components.select"] = ha_mod.components.select
 sys.modules["homeassistant.const"] = ha_mod.const
