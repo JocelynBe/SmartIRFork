@@ -37,8 +37,9 @@ class TestModeSelect:
     def test_options(self, mode_entity):
         assert mode_entity.options == ["auto", "off", "away"]
 
-    def test_set_option(self, mode_entity):
-        mode_entity.async_select_option("off")
+    @pytest.mark.asyncio
+    async def test_set_option(self, mode_entity):
+        await mode_entity.async_select_option("off")
         assert mode_entity.current_option == "off"
 
 

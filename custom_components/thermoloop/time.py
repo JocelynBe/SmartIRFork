@@ -44,7 +44,7 @@ class ThermoLoopNightWindowStart(TimeEntity):
 
     async def async_set_value(self, value: dt.time) -> None:
         self._attr_native_value = value
-        self.async_write_ha_state()
+        await self.async_write_ha_state()
 
 
 class ThermoLoopNightWindowEnd(TimeEntity):
@@ -61,4 +61,4 @@ class ThermoLoopNightWindowEnd(TimeEntity):
 
     async def async_set_value(self, value: dt.time) -> None:
         self._attr_native_value = value
-        self.async_write_ha_state()
+        await self.async_write_ha_state()

@@ -57,7 +57,7 @@ class ThermoLoopStatusSensor(SensorEntity):
     def extra_state_attributes(self) -> dict:
         return self._attributes
 
-    def update_state(
+    async def update_state(
         self,
         state: str,
         *,
@@ -84,4 +84,4 @@ class ThermoLoopStatusSensor(SensorEntity):
         if reason is not None:
             attrs[ATTR_REASON] = reason
         self._attributes = attrs
-        self.async_write_ha_state()
+        await self.async_write_ha_state()

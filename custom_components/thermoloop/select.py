@@ -54,3 +54,7 @@ class ThermoLoopSelect(SelectEntity):
         self._options = options
         self._attr_current_option = _DEFAULTS.get(key, options[0])
         self._attr_options = options
+
+    async def async_select_option(self, option: str) -> None:
+        self._attr_current_option = option
+        await self.async_write_ha_state()

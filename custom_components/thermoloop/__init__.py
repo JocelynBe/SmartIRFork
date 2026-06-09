@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING
 from homeassistant.const import Platform
 
 from .actuator import Actuator
-from .const import DOMAIN
+from .const import (
+    CONF_CLIMATE_ENTITY,
+    CONF_PRESENCE_TRACKER,
+    CONF_TEMP_SENSOR_LIVING,
+    DOMAIN,
+)
 from .control_loop import ControlLoop
 from .presence import PresenceTracker
 
@@ -34,9 +39,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up ThermoLoop from a config entry."""
-    climate_entity_id: str = entry.data["climate_entity_id"]
-    temp_sensor_entity_id: str = entry.data["temp_sensor_entity_id"]
-    device_tracker_entities: list[str] = entry.data.get("device_tracker_entities", [])
+    climate_entity_id: str = entry.data[CONF_CLIMATE_ENTITY]
+    temp_sensor_entity_id: str = entry.data[CONF_TEMP_SENSOR_LIVING]
+    device_tracker_entities: list[str] = entry.data.get(CONF_PRESENCE_TRACKER, [])
 
     actuator = Actuator(hass, climate_entity_id)
     presence = PresenceTracker(hass, device_tracker_entities)

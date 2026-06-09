@@ -229,12 +229,12 @@ class MockTimeEntity:
     def __init__(self, *args, **kwargs):
         pass
 
-    def async_write_ha_state(self):
+    async def async_write_ha_state(self):
         pass
 
-    def async_set_value(self, value) -> None:
+    async def async_set_value(self, value) -> None:
         self._attr_native_value = value
-        self.async_write_ha_state()
+        await self.async_write_ha_state()
 
     @property
     def unique_id(self):

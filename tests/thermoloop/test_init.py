@@ -3,7 +3,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.thermoloop.const import DOMAIN
+from custom_components.thermoloop.const import (
+    CONF_CLIMATE_ENTITY,
+    CONF_PRESENCE_TRACKER,
+    CONF_TEMP_SENSOR_LIVING,
+    DOMAIN,
+)
 
 
 @pytest.fixture
@@ -25,9 +30,9 @@ def mock_entry():
     entry = MagicMock()
     entry.entry_id = "test_entry_id"
     entry.data = {
-        "climate_entity_id": "climate.my_ac",
-        "temp_sensor_entity_id": "sensor.room_temp",
-        "device_tracker_entities": ["device_tracker.phone1"],
+        CONF_CLIMATE_ENTITY: "climate.my_ac",
+        CONF_TEMP_SENSOR_LIVING: "sensor.room_temp",
+        CONF_PRESENCE_TRACKER: ["device_tracker.phone1"],
     }
     return entry
 

@@ -5,14 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.thermoloop.const import (
-    ATTR_ACTIVE_SENSOR,
-    ATTR_ALGORITHM,
-    ATTR_CURRENT_TEMP,
-    ATTR_MODE,
-    ATTR_REASON,
-    ATTR_TARGET,
-)
 from custom_components.thermoloop.contracts import ACCommand
 from custom_components.thermoloop.control_loop import ControlLoop
 
@@ -32,7 +24,7 @@ def mock_actuator():
 @pytest.fixture
 def mock_sensor():
     sensor = MagicMock()
-    sensor.update_state = MagicMock()
+    sensor.update_state = AsyncMock()
     return sensor
 
 

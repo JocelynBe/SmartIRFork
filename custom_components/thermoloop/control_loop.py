@@ -9,17 +9,8 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from .actuator import Actuator
 from .algorithms import get_algorithm
-from .const import (
-    ATTR_ACTIVE_SENSOR,
-    ATTR_ALGORITHM,
-    ATTR_CURRENT_TEMP,
-    ATTR_MODE,
-    ATTR_REASON,
-    ATTR_TARGET,
-    DOMAIN,
-    EVENT_THERMOLOOP_COMMAND,
-)
-from .contracts import ACCommand, ACState, ControlInput, ControlMode, Fan, Mode
+from .const import EVENT_THERMOLOOP_COMMAND
+from .contracts import ACState, ControlInput, ControlMode, Fan, Mode
 from .controller import Controller
 from .guards import GuardConfig
 from .presence import PresenceTracker
@@ -28,6 +19,7 @@ from .sensor import ThermoLoopStatusSensor
 _LOGGER = logging.getLogger(__name__)
 
 _TICK_INTERVAL_SECONDS = 60
+_TREND_WINDOW = 5
 
 
 def _night_window_active(now, start_str, end_str):
@@ -71,6 +63,8 @@ class ControlLoop:
         self._algo_name: str = "v0"
         self._unsub_interval = None
         self._interval = dt.timedelta(seconds=_TICK_INTERVAL_SECONDS)
+        self._last_command_at: float | None = None
+        self._temp_history: list[tuple[float, float]] = []
 
     def _now(self):
         """Return current datetime. Override in tests to control time."""
@@ -96,13 +90,14 @@ class ControlLoop:
         try:
             ci = self._build_input()
             if ci is None:
-                self._status_sensor.update_state("error", reason="incomplete_context")
+                await self._status_sensor.update_state("error", reason="incomplete_context")
                 return
 
             decision = self._controller.decide(ci)
 
             if decision.is_send:
                 cmd = decision.command
+                self._last_command_at = ci.now
                 await self._actuator.apply(cmd)
                 self._hass.bus.async_fire(
                     EVENT_THERMOLOOP_COMMAND,
@@ -113,7 +108,7 @@ class ControlLoop:
                         "target": ci.target,
                     },
                 )
-                self._status_sensor.update_state(
+                await self._status_sensor.update_state(
                     "active" if cmd.power else "off",
                     mode=ci.mode.value,
                     algorithm=self._algo_name,
@@ -123,7 +118,7 @@ class ControlLoop:
                     reason=cmd.reason,
                 )
             else:
-                self._status_sensor.update_state(
+                await self._status_sensor.update_state(
                     "idle",
                     mode=ci.mode.value,
                     algorithm=self._algo_name,
@@ -131,7 +126,18 @@ class ControlLoop:
                 )
         except Exception:
             _LOGGER.exception("Control tick failed")
-            self._status_sensor.update_state("error", reason="exception")
+            await self._status_sensor.update_state("error", reason="exception")
+
+    def _compute_trend(self) -> float:
+        """Compute temperature trend (deg C per minute) from recent history."""
+        if len(self._temp_history) < 2:
+            return 0.0
+        first_ts, first_temp = self._temp_history[0]
+        last_ts, last_temp = self._temp_history[-1]
+        dt_min = (last_ts - first_ts) / 60.0
+        if dt_min < 0.1:
+            return 0.0
+        return (last_temp - first_temp) / dt_min
 
     def _build_input(self):
         """Read HA entity states and build a ControlInput for the brain."""
@@ -147,6 +153,10 @@ class ControlLoop:
             current_temp = float(temp_state.state)
         except (ValueError, TypeError):
             return None
+
+        now = self._now()
+        self._temp_history.append((now.timestamp(), current_temp))
+        self._temp_history = self._temp_history[-_TREND_WINDOW:]
 
         climate = self._hass.states.get(self._climate_entity_id)
         if climate is None or climate.state in ("unknown", "unavailable", "", None):
@@ -198,6 +208,8 @@ class ControlLoop:
             "away": ControlMode.AWAY,
         }
         control_mode = cm_map.get(mode_str, ControlMode.AUTO)
+        if control_mode == ControlMode.AUTO and self._presence.is_away:
+            control_mode = ControlMode.AWAY
 
         algo_str = self._read_entity(
             f"select.thermoloop_algorithm_{self._entry_id}", "v0"
@@ -210,14 +222,14 @@ class ControlLoop:
             self._algo_name = "v0"
 
         return ControlInput(
-            now=self._now().timestamp(),
+            now=now.timestamp(),
             mode=control_mode,
             current_temp=current_temp,
             sensor_age=1.0,
             target=target,
             assumed_state=assumed,
-            temp_trend=0.0,
-            last_command_at=None,
+            temp_trend=self._compute_trend(),
+            last_command_at=self._last_command_at,
         )
 
     def _read_entity(self, entity_id, default=None):
