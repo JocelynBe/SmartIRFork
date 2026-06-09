@@ -45,7 +45,8 @@ class ControlLoop:
         hass,
         entry_id: str,
         climate_entity_id: str,
-        temp_sensor_entity_id: str,
+        temp_sensor_day_entity_id: str,
+        temp_sensor_night_entity_id: str,
         actuator: Actuator,
         presence: PresenceTracker,
         status_sensor: ThermoLoopStatusSensor,
@@ -53,7 +54,9 @@ class ControlLoop:
         self._hass = hass
         self._entry_id = entry_id
         self._climate_entity_id = climate_entity_id
-        self._temp_sensor_entity_id = temp_sensor_entity_id
+        self._temp_sensor_day = temp_sensor_day_entity_id
+        self._temp_sensor_night = temp_sensor_night_entity_id
+        self._active_sensor_id: str | None = None
         self._actuator = actuator
         self._presence = presence
         self._status_sensor = status_sensor
@@ -113,7 +116,7 @@ class ControlLoop:
                     mode=ci.mode.value,
                     algorithm=self._algo_name,
                     target=ci.target,
-                    active_sensor=self._temp_sensor_entity_id,
+                    active_sensor=self._active_sensor_id,
                     current_temp=ci.current_temp,
                     reason=cmd.reason,
                 )
@@ -141,7 +144,22 @@ class ControlLoop:
 
     def _build_input(self):
         """Read HA entity states and build a ControlInput for the brain."""
-        temp_state = self._hass.states.get(self._temp_sensor_entity_id)
+        now = self._now()
+
+        # Read night window config first (needed for phase detection)
+        night_start = self._read_entity(
+            f"time.thermoloop_night_window_start_{self._entry_id}"
+        )
+        night_end = self._read_entity(
+            f"time.thermoloop_night_window_end_{self._entry_id}"
+        )
+        is_night = _night_window_active(now, night_start, night_end)
+
+        # Pick sensor by phase
+        active_sensor_id = self._temp_sensor_night if is_night else self._temp_sensor_day
+        self._active_sensor_id = active_sensor_id
+
+        temp_state = self._hass.states.get(active_sensor_id)
         if temp_state is None or temp_state.state in (
             "unknown",
             "unavailable",
@@ -154,7 +172,6 @@ class ControlLoop:
         except (ValueError, TypeError):
             return None
 
-        now = self._now()
         self._temp_history.append((now.timestamp(), current_temp))
         self._temp_history = self._temp_history[-_TREND_WINDOW:]
 
@@ -189,14 +206,6 @@ class ControlLoop:
             f"number.thermoloop_target_night_{self._entry_id}", 24.0
         )
 
-        night_start = self._read_entity(
-            f"time.thermoloop_night_window_start_{self._entry_id}"
-        )
-        night_end = self._read_entity(
-            f"time.thermoloop_night_window_end_{self._entry_id}"
-        )
-
-        is_night = _night_window_active(self._now(), night_start, night_end)
         target = night_target if is_night else day_target
 
         mode_str = self._read_entity(

@@ -10,6 +10,7 @@ from custom_components.thermoloop.actuator import Actuator
 from custom_components.thermoloop.const import (
     CONF_CLIMATE_ENTITY,
     CONF_PRESENCE_TRACKER,
+    CONF_TEMP_SENSOR_BEDROOM,
     CONF_TEMP_SENSOR_LIVING,
     DOMAIN,
 )
@@ -40,7 +41,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up ThermoLoop from a config entry."""
     climate_entity_id: str = entry.data[CONF_CLIMATE_ENTITY]
-    temp_sensor_entity_id: str = entry.data[CONF_TEMP_SENSOR_LIVING]
+    temp_sensor_day: str = entry.data[CONF_TEMP_SENSOR_LIVING]
+    temp_sensor_night: str = entry.data[CONF_TEMP_SENSOR_BEDROOM]
     device_tracker_entities: list[str] = entry.data.get(CONF_PRESENCE_TRACKER, [])
 
     actuator = Actuator(hass, climate_entity_id)
@@ -66,7 +68,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass=hass,
         entry_id=entry.entry_id,
         climate_entity_id=climate_entity_id,
-        temp_sensor_entity_id=temp_sensor_entity_id,
+        temp_sensor_day_entity_id=temp_sensor_day,
+        temp_sensor_night_entity_id=temp_sensor_night,
         actuator=actuator,
         presence=presence,
         status_sensor=status_sensor,
