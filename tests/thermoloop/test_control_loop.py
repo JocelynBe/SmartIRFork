@@ -5,8 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import pytest
-
 from custom_components.thermoloop.contracts import ACCommand
 from custom_components.thermoloop.control_loop import ControlLoop
 

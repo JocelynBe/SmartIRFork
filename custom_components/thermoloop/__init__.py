@@ -61,13 +61,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry_data = hass.data[DOMAIN][entry.entry_id]
     status_sensor: ThermoLoopStatusSensor | None = entry_data.get("status_sensor")
 
-    # Event-driven presence: callback fires control_loop.async_tick on transition
-    async def _on_presence(transition: str) -> None:
-        await control_loop.async_tick()
-
-    presence = PresenceTracker(hass, device_tracker_entities, _on_presence)
-    entry_data["presence"] = presence
-
     control_loop = ControlLoop(
         hass=hass,
         entry_id=entry.entry_id,
@@ -75,12 +68,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         temp_sensor_day_entity_id=temp_sensor_day,
         temp_sensor_night_entity_id=temp_sensor_night,
         actuator=actuator,
-        presence=presence,
+        presence=None,
         status_sensor=status_sensor,
         humidity_sensor_day_entity_id=humidity_sensor_living,
         humidity_sensor_night_entity_id=humidity_sensor_bedroom,
     )
     entry_data["control_loop"] = control_loop
+
+    # Event-driven presence: callback fires control_loop.async_tick on transition
+    async def _on_presence(transition: str) -> None:
+        await control_loop.async_tick()
+
+    presence = PresenceTracker(hass, device_tracker_entities, _on_presence)
+    entry_data["presence"] = presence
+    control_loop._presence = presence
 
     control_loop.start()
 
@@ -97,12 +98,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     entry_data = hass.data[DOMAIN].get(entry.entry_id, {})
-    control_loop = entry_data.get("control_loop")
-    if control_loop is not None:
-        control_loop.stop()
     presence = entry_data.get("presence")
     if presence is not None:
         presence.stop()
+    control_loop = entry_data.get("control_loop")
+    if control_loop is not None:
+        control_loop.stop()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
