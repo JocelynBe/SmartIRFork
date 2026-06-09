@@ -1,3 +1,0 @@
-# The check_updates and update_component services were removed as a
-# supply-chain hardening measure (the runtime self-updater overwrote this
-# integration's own code from a remote source). Update via HACS or manually.
