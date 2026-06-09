@@ -9,6 +9,7 @@ import types
 ha_mod = types.ModuleType("homeassistant")
 ha_mod.const = types.ModuleType("homeassistant.const")
 ha_mod.const.STATE_IDLE = "idle"
+ha_mod.const.CONF_NAME = "name"
 
 class MockPlatform:
     SENSOR = "sensor"
@@ -26,6 +27,16 @@ ha_mod.core.HomeAssistant = MagicMock
 ha_mod.config_entries = types.ModuleType("homeassistant.config_entries")
 ha_mod.config_entries.ConfigEntry = MagicMock
 
+class MockConfigFlow(MagicMock):
+    """Mock ConfigFlow that accepts domain= in subclass."""
+    domain = None
+
+    def __init_subclass__(cls, domain=None, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.domain = domain
+
+ha_mod.config_entries.ConfigFlow = MockConfigFlow
+
 ha_mod.helpers = types.ModuleType("homeassistant.helpers")
 ha_mod.helpers.entity_platform = types.ModuleType(
     "homeassistant.helpers.entity_platform"
@@ -41,7 +52,12 @@ def _mock_track_time_interval(hass, callback, interval):
         callback()
     return MagicMock()
 
+ha_mod.helpers.event.async_track_state_change = MagicMock(return_value=MagicMock())
 ha_mod.helpers.event.async_track_time_interval = _mock_track_time_interval
+
+ha_mod.helpers.selector = types.ModuleType("homeassistant.helpers.selector")
+ha_mod.helpers.selector.EntitySelector = MagicMock
+ha_mod.helpers.selector.EntitySelectorConfig = MagicMock
 
 ha_mod.components = types.ModuleType("homeassistant.components")
 ha_mod.components.sensor = types.ModuleType("homeassistant.components.sensor")
