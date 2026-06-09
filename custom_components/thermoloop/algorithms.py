@@ -67,3 +67,45 @@ class AggressiveV0:
         # exactly on target: hold position, quiet fan, keep a sensible mode
         mode = ci.assumed_state.mode if ci.assumed_state.power else Mode.COOL
         return ACCommand(True, mode, maintain_setpoint, Fan.LOW, "v0 on-target")
+
+
+# v1 tuning: how strongly the temperature trend feeds the effective error.
+TREND_GAIN = 1.0
+TREND_LOOKAHEAD_MIN = 10.0
+
+
+class ProportionalV1:
+    """Proportional response with trend anticipation, mapped to discrete steps."""
+
+    name = "v1"
+
+    def compute(self, ci: ControlInput) -> ACCommand:
+        error = ci.current_temp - ci.target
+        eff = error + TREND_GAIN * ci.temp_trend * TREND_LOOKAHEAD_MIN
+
+        if eff == 0:
+            mode = ci.assumed_state.mode if ci.assumed_state.power else Mode.COOL
+            setpoint = clamp(round(ci.target), MIN_SETPOINT, MAX_SETPOINT)
+            return ACCommand(True, mode, setpoint, Fan.LOW,
+                             f"v1 on-target (err {error:+.1f}, trend {ci.temp_trend:+.2f})")
+
+        mode = Mode.COOL if eff > 0 else Mode.HEAT
+        # eff>0 (warm): setpoint below target; eff<0 (cold): above target.
+        setpoint = clamp(round(ci.target - eff), MIN_SETPOINT, MAX_SETPOINT)
+        fan = fan_for_magnitude(abs(eff))
+        return ACCommand(True, mode, setpoint, fan,
+                         f"v1 eff {eff:+.1f} (err {error:+.1f}, trend {ci.temp_trend:+.2f})")
+
+
+_ALGORITHMS: dict[str, type] = {
+    AggressiveV0.name: AggressiveV0,
+    ProportionalV1.name: ProportionalV1,
+}
+
+
+def get_algorithm(name: str) -> Algorithm:
+    """Look up an algorithm strategy by its ``select.thermoloop_algorithm`` value."""
+    try:
+        return _ALGORITHMS[name]()
+    except KeyError:
+        raise ValueError(f"unknown algorithm: {name!r} (expected one of {sorted(_ALGORITHMS)})")
