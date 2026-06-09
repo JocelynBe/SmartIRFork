@@ -1,7 +1,7 @@
 """Mock homeassistant modules for testing without a full HA install."""
 import asyncio
 import sys
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import types
 
@@ -61,6 +61,15 @@ ha_mod.helpers.selector.EntitySelector = MagicMock
 ha_mod.helpers.selector.EntitySelectorConfig = MagicMock
 
 ha_mod.components = types.ModuleType("homeassistant.components")
+
+ha_mod.components.http = types.ModuleType("homeassistant.components.http")
+ha_mod.components.http.StaticPathConfig = MagicMock()
+
+ha_mod.components.frontend = types.ModuleType("homeassistant.components.frontend")
+
+ha_mod.components.panel_custom = types.ModuleType("homeassistant.components.panel_custom")
+ha_mod.components.panel_custom.async_register_panel = AsyncMock()
+
 ha_mod.components.sensor = types.ModuleType("homeassistant.components.sensor")
 
 # Build a minimal SensorEntity base class
@@ -294,6 +303,9 @@ sys.modules["homeassistant.config_entries"] = ha_mod.config_entries
 sys.modules["homeassistant.helpers"] = ha_mod.helpers
 sys.modules["homeassistant.helpers.entity_platform"] = ha_mod.helpers.entity_platform
 sys.modules["homeassistant.components"] = ha_mod.components
+sys.modules["homeassistant.components.http"] = ha_mod.components.http
+sys.modules["homeassistant.components.frontend"] = ha_mod.components.frontend
+sys.modules["homeassistant.components.panel_custom"] = ha_mod.components.panel_custom
 sys.modules["homeassistant.components.sensor"] = ha_mod.components.sensor
 sys.modules["homeassistant.components.number"] = ha_mod.components.number
 sys.modules["homeassistant.components.select"] = ha_mod.components.select

@@ -1,0 +1,11 @@
+{
+  "name": "thermoloop-panel",
+  "private": true,
+  "scripts": {
+    "build": "esbuild www/src/thermoloop-panel.js --bundle --format=esm --target=es2021 --external:lit --outfile=www/thermoloop-panel.js",
+    "watch": "esbuild www/src/thermoloop-panel.js --bundle --format=esm --target=es2021 --external:lit --outfile=www/thermoloop-panel.js --watch"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

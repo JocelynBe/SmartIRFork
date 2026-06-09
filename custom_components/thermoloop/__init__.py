@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from homeassistant.const import Platform
 
 from custom_components.thermoloop.actuator import Actuator
+from custom_components.thermoloop.panel import async_register_panel, async_remove_panel
 from custom_components.thermoloop.const import (
     CONF_CLIMATE_ENTITY,
     CONF_HUMIDITY_SENSOR_BEDROOM,
@@ -91,6 +92,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.services.async_register(DOMAIN, "tick", handle_tick)
 
+    if not hass.data[DOMAIN].get("_panel_registered"):
+        await async_register_panel(hass)
+        hass.data[DOMAIN]["_panel_registered"] = True
+
     _LOGGER.debug("ThermoLoop setup complete for entry %s", entry.entry_id)
     return True
 
@@ -107,4 +112,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
+        remaining = [k for k in hass.data[DOMAIN] if k != "_panel_registered"]
+        if not remaining:
+            await async_remove_panel(hass)
+            hass.data[DOMAIN].pop("_panel_registered", None)
     return True
