@@ -29,8 +29,12 @@ class Actuator:
     def last_state(self) -> ACState | None:
         return self._last_state
 
-    async def apply(self, cmd: ACCommand) -> None:
-        """Send an ACCommand via Broadlink remote."""
+    async def apply(self, cmd: ACCommand) -> bool:
+        """Send an ACCommand via Broadlink remote.
+
+        Returns:
+            True if the command was sent successfully, False otherwise.
+        """
         try:
             code = generate_power_off() if not cmd.power else generate(cmd)
             await self._hass.services.async_call(
@@ -44,5 +48,7 @@ class Actuator:
                 setpoint=cmd.setpoint,
                 fan=cmd.fan,
             )
+            return True
         except Exception:
             _LOGGER.exception("Failed to send IR command via %s", self._entity_id)
+            return False

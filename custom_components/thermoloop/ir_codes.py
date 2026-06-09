@@ -22,15 +22,19 @@ from custom_components.thermoloop.contracts import ACCommand, ACState, Fan, Mode
 
 # Carrier and timing constants
 CARRIER_FREQ = 38000
-# Broadlink tick: 269 / 128 ≈ 2.10 us per tick (at 38 kHz carrier)
-_TICK_US = 269.0 / 128.0
 
-_LEADER_MARK = int(3400 / _TICK_US)
-_LEADER_SPACE = int(1750 / _TICK_US)
-_BIT1_MARK = int(432 / _TICK_US)
-_BIT1_SPACE = int(432 / _TICK_US)
-_BIT0_SPACE = int(1284 / _TICK_US)
-_TRAILER_MARK = int(432 / _TICK_US)
+# Broadlink tick duration unit: ticks = round(microseconds * 269 / 8192)
+# ≈ 32.84 microseconds per tick
+def _us_to_ticks(us: float) -> int:
+    """Convert microseconds to Broadlink ticks."""
+    return int(round(us * 269 / 8192))
+
+_LEADER_MARK = _us_to_ticks(3400)
+_LEADER_SPACE = _us_to_ticks(1750)
+_BIT1_MARK = _us_to_ticks(432)
+_BIT1_SPACE = _us_to_ticks(432)
+_BIT0_SPACE = _us_to_ticks(1284)
+_TRAILER_MARK = _us_to_ticks(432)
 
 # Mode encoding for the MSZ-GL18NA (index into NJAT protocol)
 _MODE_ENCODE = {
@@ -95,7 +99,12 @@ def _payload_to_bits(payload: bytes) -> list[int]:
 def _build_broadlink_packet(bits: list[int]) -> bytes:
     """Build Broadlink raw IR packet from bit list.
 
-    Format: frequency_bytes + mark/space timing pairs (2-byte LE each)
+    Broadlink IR raw packet format:
+      byte 0: 0x26 (IR)
+      byte 1: repeat count (0x00)
+      bytes 2-3: LENGTH of payload (little-endian uint16)
+      then: timing data (one byte per timing, or 0x00 + 2 big-endian bytes if >= 256 ticks)
+      then: terminator (0x0d 0x05)
     """
     timings: list[int] = [_LEADER_MARK, _LEADER_SPACE]
 
@@ -107,12 +116,23 @@ def _build_broadlink_packet(bits: list[int]) -> bytes:
 
     timings.append(_TRAILER_MARK)
 
-    # Broadlink IR packet: frequency (4 bytes) + timings (2-byte LE each)
-    packet = bytearray()
-    # Frequency encoding for 38 kHz
-    packet.extend(b"\x26\x00\x00\x00")
+    # Encode timings: one byte if < 256, else 0x00 + big-endian uint16
+    data = bytearray()
     for t in timings:
-        packet.extend(struct.pack("<H", max(0, min(0xFFFF, t))))
+        t = max(0, min(0xFFFF, t))
+        if t < 256:
+            data.append(t)
+        else:
+            data.append(0x00)
+            data.extend(struct.pack(">H", t))
+
+    # Append terminator
+    data.extend(b"\x0d\x05")
+
+    # Compute payload length and build final packet
+    length = len(data)
+    packet = bytearray([0x26, 0x00, length & 0xFF, (length >> 8) & 0xFF])
+    packet.extend(data)
 
     return bytes(packet)
 

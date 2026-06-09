@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.number import NumberEntity
+from homeassistant.components.number import NumberEntity, RestoreNumber
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
@@ -27,13 +27,17 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the ThermoLoop target number entities."""
-    async_add_entities([
-        ThermoLoopTargetNumber(hass, entry.entry_id, "day"),
-        ThermoLoopTargetNumber(hass, entry.entry_id, "night"),
-    ])
+    day_entity = ThermoLoopTargetNumber(hass, entry.entry_id, "day")
+    night_entity = ThermoLoopTargetNumber(hass, entry.entry_id, "night")
+    async_add_entities([day_entity, night_entity])
+
+    # Register entities in hass.data for control loop access
+    store = hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {}).setdefault("entities", {})
+    store["target_day"] = day_entity
+    store["target_night"] = night_entity
 
 
-class ThermoLoopTargetNumber(NumberEntity):
+class ThermoLoopTargetNumber(RestoreNumber):
     """A target temperature for day or night phase."""
 
     _attr_has_entity_name = True
@@ -49,6 +53,13 @@ class ThermoLoopTargetNumber(NumberEntity):
         self._attr_unique_id = f"thermoloop_target_{phase}_{entry_id}"
         self._attr_name = f"ThermoLoop Target {phase.capitalize()}"
         self._attr_native_value = _DEFAULT_TARGETS[phase]
+
+    async def async_added_to_hass(self) -> None:
+        """Restore state on startup."""
+        await super().async_added_to_hass()
+        last = await self.async_get_last_number_data()
+        if last is not None and last.native_value is not None:
+            self._attr_native_value = last.native_value
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the target temperature."""

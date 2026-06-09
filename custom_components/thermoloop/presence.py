@@ -5,6 +5,7 @@ and fires a callback when presence transitions (home -> away, away -> home).
 """
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Callable
 
@@ -46,7 +47,9 @@ class PresenceTracker:
             transition = "away" if now_away else "home"
             _LOGGER.debug("Presence transition: %s", transition)
             if self._callback:
-                self._callback(transition)
+                result = self._callback(transition)
+                if inspect.isawaitable(result):
+                    self._hass.async_create_task(result)
             self._was_away = now_away
 
     @property
@@ -54,13 +57,18 @@ class PresenceTracker:
         return self._compute_away()
 
     def _compute_away(self) -> bool:
+        """Return True only if we have at least one tracker AND ALL are not_home.
+
+        If a tracker is home, unknown, unavailable, or missing, the user is present.
+        """
         if not self._client_ids:
             return False
         for eid in self._client_ids:
             state = self._hass.states.get(eid)
-            if state is None or state.state in ("not_home", "unknown"):
-                continue
-            return False
+            # If any tracker is missing, unknown, unavailable, or home, user is present
+            if state is None or state.state != "not_home":
+                return False
+        # All trackers report not_home
         return True
 
     @property

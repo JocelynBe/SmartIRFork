@@ -53,7 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     actuator = Actuator(hass, broadlink_remote_id)
 
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {"assumed_state": None}
+    hass.data[DOMAIN][entry.entry_id] = {"entities": {}}
 
     # Forward setup to entity platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -62,6 +62,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry_data = hass.data[DOMAIN][entry.entry_id]
     status_sensor: ThermoLoopStatusSensor | None = entry_data.get("status_sensor")
 
+    # Create control loop first (without presence)
     control_loop = ControlLoop(
         hass=hass,
         entry_id=entry.entry_id,
@@ -79,9 +80,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _on_presence(transition: str) -> None:
         await control_loop.async_tick()
 
+    # Create presence tracker with callback
     presence = PresenceTracker(hass, device_tracker_entities, _on_presence)
     entry_data["presence"] = presence
-    control_loop._presence = presence
+
+    # Set presence in control loop via public method
+    control_loop.set_presence(presence)
 
     control_loop.start()
 
@@ -113,6 +117,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].pop(entry.entry_id)
         remaining = [k for k in hass.data[DOMAIN] if k != "_panel_registered"]
         if not remaining:
+            # Remove the tick service when no entries remain
+            hass.services.async_remove(DOMAIN, "tick")
             await async_remove_panel(hass)
             hass.data[DOMAIN].pop("_panel_registered", None)
     return True

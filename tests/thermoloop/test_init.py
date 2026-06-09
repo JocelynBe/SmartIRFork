@@ -57,7 +57,7 @@ async def test_async_setup_entry_stores_control_loop(mock_hass, mock_entry):
 
 @pytest.mark.asyncio
 async def test_async_unload_entry_removes_data(mock_hass, mock_entry):
-    """unload_entry should clean up hass.data."""
+    """unload_entry should clean up hass.data and remove service."""
     from custom_components.thermoloop import async_setup_entry, async_unload_entry
 
     await async_setup_entry(mock_hass, mock_entry)
@@ -65,6 +65,8 @@ async def test_async_unload_entry_removes_data(mock_hass, mock_entry):
     result = await async_unload_entry(mock_hass, mock_entry)
 
     assert result is True
+    # When no entries remain, the tick service should be removed
+    mock_hass.services.async_remove.assert_called_once_with("thermoloop", "tick")
 
 
 @pytest.mark.asyncio

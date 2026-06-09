@@ -122,6 +122,11 @@ class MockSensorEntity:
 
 ha_mod.components.sensor.SensorEntity = MockSensorEntity
 
+# Mock NumberData for restore support
+class MockNumberData:
+    def __init__(self, native_value):
+        self.native_value = native_value
+
 # Build a minimal NumberEntity base class
 class MockNumberEntity:
     _attr_has_entity_name = False
@@ -141,6 +146,12 @@ class MockNumberEntity:
 
     async def async_set_native_value(self, value: float) -> None:
         pass
+
+    async def async_added_to_hass(self):
+        pass
+
+    async def async_get_last_number_data(self):
+        return None
 
     @property
     def unique_id(self):
@@ -198,6 +209,11 @@ class MockNumberEntity:
     def native_unit_of_measurement(self, value):
         self._attr_native_unit_of_measurement = value
 
+# Mock State for restore support
+class MockState:
+    def __init__(self, state):
+        self.state = state
+
 # Build a minimal SelectEntity base class
 class MockSelectEntity:
     _attr_has_entity_name = False
@@ -214,6 +230,12 @@ class MockSelectEntity:
 
     def async_select_option(self, option: str) -> None:
         self._attr_current_option = option
+
+    async def async_added_to_hass(self):
+        pass
+
+    async def async_get_last_state(self):
+        return None
 
     @property
     def unique_id(self):
@@ -264,6 +286,12 @@ class MockTimeEntity:
         self._attr_native_value = value
         await self.async_write_ha_state()
 
+    async def async_added_to_hass(self):
+        pass
+
+    async def async_get_last_state(self):
+        return None
+
     @property
     def unique_id(self):
         return self._attr_unique_id
@@ -288,8 +316,24 @@ class MockTimeEntity:
     def native_value(self, value):
         self._attr_native_value = value
 
+# RestoreNumber is a subclass of NumberEntity that supports async_get_last_number_data
+class MockRestoreNumber(MockNumberEntity):
+    pass
+
 ha_mod.components.number = types.ModuleType("homeassistant.components.number")
 ha_mod.components.number.NumberEntity = MockNumberEntity
+ha_mod.components.number.RestoreNumber = MockRestoreNumber
+
+# RestoreEntity for SelectEntity and TimeEntity
+class MockRestoreEntity:
+    async def async_added_to_hass(self):
+        pass
+
+    async def async_get_last_state(self):
+        return None
+
+ha_mod.helpers.restore_state = types.ModuleType("homeassistant.helpers.restore_state")
+ha_mod.helpers.restore_state.RestoreEntity = MockRestoreEntity
 
 ha_mod.components.select = types.ModuleType("homeassistant.components.select")
 ha_mod.components.select.SelectEntity = MockSelectEntity
@@ -304,6 +348,7 @@ sys.modules["homeassistant.core"] = ha_mod.core
 sys.modules["homeassistant.config_entries"] = ha_mod.config_entries
 sys.modules["homeassistant.helpers"] = ha_mod.helpers
 sys.modules["homeassistant.helpers.entity_platform"] = ha_mod.helpers.entity_platform
+sys.modules["homeassistant.helpers.restore_state"] = ha_mod.helpers.restore_state
 sys.modules["homeassistant.components"] = ha_mod.components
 sys.modules["homeassistant.components.http"] = ha_mod.components.http
 sys.modules["homeassistant.components.frontend"] = ha_mod.components.frontend

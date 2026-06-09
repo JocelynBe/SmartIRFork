@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 
@@ -26,14 +27,18 @@ _SAFE_DEFAULT_STATE = ACState(
 )
 
 
-def _night_window_active(now, start_str, end_str):
-    """Check if current time falls within the night window (supports wrap past midnight)."""
-    if not start_str or not end_str:
-        return False
-    try:
-        start = dt.time.fromisoformat(start_str)
-        end = dt.time.fromisoformat(end_str)
-    except (ValueError, TypeError):
+def _night_window_active(now, start, end):
+    """Check if current time falls within the night window (supports wrap past midnight).
+
+    Args:
+        now: datetime object to check
+        start: datetime.time object or None
+        end: datetime.time object or None
+
+    Returns:
+        False if either start or end is None, otherwise True if now falls in the window.
+    """
+    if start is None or end is None:
         return False
     current = now.time()
     if start <= end:
@@ -51,8 +56,8 @@ class ControlLoop:
         temp_sensor_day_entity_id: str,
         temp_sensor_night_entity_id: str,
         actuator: Actuator,
-        presence: PresenceTracker,
-        status_sensor: ThermoLoopStatusSensor,
+        presence: PresenceTracker | None = None,
+        status_sensor: ThermoLoopStatusSensor | None = None,
         humidity_sensor_day_entity_id: str | None = None,
         humidity_sensor_night_entity_id: str | None = None,
     ) -> None:
@@ -75,6 +80,7 @@ class ControlLoop:
         self._interval = dt.timedelta(seconds=_TICK_INTERVAL_SECONDS)
         self._last_command_at: float | None = None
         self._temp_history: list[tuple[float, float]] = []
+        self._lock = asyncio.Lock()
 
     def _now(self):
         """Return current datetime. Override in tests to control time."""
@@ -97,51 +103,57 @@ class ControlLoop:
 
     async def async_tick(self) -> None:
         """Execute one full control cycle."""
-        try:
-            ci = self._build_input()
-            if ci is None:
-                await self._status_sensor.update_state("error", reason="incomplete_context")
-                return
+        async with self._lock:
+            try:
+                ci = self._build_input()
+                if ci is None:
+                    if self._status_sensor:
+                        await self._status_sensor.update_state("error", reason="incomplete_context")
+                    return
 
-            decision = self._controller.decide(ci)
+                decision = self._controller.decide(ci)
 
-            if decision.is_send:
-                cmd = decision.command
-                self._last_command_at = ci.now
-                await self._actuator.apply(cmd)
-                # Store assumed state from actuator
-                if self._actuator.last_state is not None:
-                    entry_data = self._hass.data.setdefault(DOMAIN, {}).setdefault(self._entry_id, {})
-                    entry_data["assumed_state"] = self._actuator.last_state
-                self._hass.bus.async_fire(
-                    EVENT_THERMOLOOP_COMMAND,
-                    {
-                        "command": str(cmd),
-                        "reason": cmd.reason,
-                        "mode": ci.mode.value,
-                        "target": ci.target,
-                    },
-                )
-                await self._status_sensor.update_state(
-                    "active" if cmd.power else "off",
-                    mode=ci.mode.value,
-                    algorithm=self._algo_name,
-                    target=ci.target,
-                    active_sensor=self._active_sensor_id,
-                    current_temp=ci.current_temp,
-                    humidity=self._current_humidity,
-                    reason=cmd.reason,
-                )
-            else:
-                await self._status_sensor.update_state(
-                    "idle",
-                    mode=ci.mode.value,
-                    algorithm=self._algo_name,
-                    reason=decision.reason,
-                )
-        except Exception:
-            _LOGGER.exception("Control tick failed")
-            await self._status_sensor.update_state("error", reason="exception")
+                if decision.is_send:
+                    cmd = decision.command
+                    success = await self._actuator.apply(cmd)
+                    if success:
+                        self._last_command_at = ci.now
+                        self._hass.bus.async_fire(
+                            EVENT_THERMOLOOP_COMMAND,
+                            {
+                                "command": str(cmd),
+                                "reason": cmd.reason,
+                                "mode": ci.mode.value,
+                                "target": ci.target,
+                            },
+                        )
+                        if self._status_sensor:
+                            await self._status_sensor.update_state(
+                                "active" if cmd.power else "off",
+                                mode=ci.mode.value,
+                                algorithm=self._algo_name,
+                                target=ci.target,
+                                active_sensor=self._active_sensor_id,
+                                current_temp=ci.current_temp,
+                                humidity=self._current_humidity,
+                                reason=cmd.reason,
+                            )
+                    else:
+                        # Actuator failed to send command
+                        if self._status_sensor:
+                            await self._status_sensor.update_state("error", reason="actuator_failed")
+                else:
+                    if self._status_sensor:
+                        await self._status_sensor.update_state(
+                            "idle",
+                            mode=ci.mode.value,
+                            algorithm=self._algo_name,
+                            reason=decision.reason,
+                        )
+            except Exception:
+                _LOGGER.exception("Control tick failed")
+                if self._status_sensor:
+                    await self._status_sensor.update_state("error", reason="exception")
 
     def _compute_trend(self) -> float:
         """Compute temperature trend (deg C per minute) from recent history."""
@@ -154,23 +166,25 @@ class ControlLoop:
             return 0.0
         return (last_temp - first_temp) / dt_min
 
-    def _assumed_state(self) -> ACState:
-        """Read the last-commanded AC state from hass.data."""
+    def _entities(self) -> dict:
+        """Read the entity objects from hass.data[DOMAIN][entry_id]["entities"]."""
         entry_data = self._hass.data.get(DOMAIN, {}).get(self._entry_id, {})
-        state = entry_data.get("assumed_state")
-        return state if state is not None else _SAFE_DEFAULT_STATE
+        return entry_data.get("entities", {})
+
+    def _assumed_state(self) -> ACState:
+        """Read the last-commanded AC state from the actuator."""
+        return self._actuator.last_state if self._actuator.last_state is not None else _SAFE_DEFAULT_STATE
 
     def _build_input(self):
         """Read HA entity states and build a ControlInput for the brain."""
         now = self._now()
 
-        # Read night window config first (needed for phase detection)
-        night_start = self._read_entity(
-            f"time.thermoloop_night_window_start_{self._entry_id}"
-        )
-        night_end = self._read_entity(
-            f"time.thermoloop_night_window_end_{self._entry_id}"
-        )
+        # Read night window config from entity objects (read datetime.time objects directly)
+        entities = self._entities()
+        night_start_entity = entities.get("night_start")
+        night_end_entity = entities.get("night_end")
+        night_start = night_start_entity.native_value if night_start_entity else None
+        night_end = night_end_entity.native_value if night_end_entity else None
         is_night = _night_window_active(now, night_start, night_end)
 
         # Pick sensor by phase
@@ -213,30 +227,32 @@ class ControlLoop:
 
         assumed = self._assumed_state()
 
-        day_target = self._read_target(
-            f"number.thermoloop_target_day_{self._entry_id}", 22.0
-        )
-        night_target = self._read_target(
-            f"number.thermoloop_target_night_{self._entry_id}", 24.0
-        )
+        # Read target temperatures from entity objects
+        day_target_entity = entities.get("target_day")
+        day_target = day_target_entity.native_value if day_target_entity and day_target_entity.native_value is not None else 22.0
+
+        night_target_entity = entities.get("target_night")
+        night_target = night_target_entity.native_value if night_target_entity and night_target_entity.native_value is not None else 24.0
 
         target = night_target if is_night else day_target
 
-        mode_str = self._read_entity(
-            f"select.thermoloop_mode_{self._entry_id}", "auto"
-        )
+        # Read mode from entity object
+        mode_entity = entities.get("mode")
+        mode_str = mode_entity.current_option if mode_entity and mode_entity.current_option is not None else "auto"
+
         cm_map = {
             "auto": ControlMode.AUTO,
             "off": ControlMode.OFF,
             "away": ControlMode.AWAY,
         }
         control_mode = cm_map.get(mode_str, ControlMode.AUTO)
-        if control_mode == ControlMode.AUTO and self._presence.is_away:
+        if control_mode == ControlMode.AUTO and self._presence and self._presence.is_away:
             control_mode = ControlMode.AWAY
 
-        algo_str = self._read_entity(
-            f"select.thermoloop_algorithm_{self._entry_id}", "v0"
-        )
+        # Read algorithm from entity object
+        algo_entity = entities.get("algorithm")
+        algo_str = algo_entity.current_option if algo_entity and algo_entity.current_option is not None else "v0"
+
         try:
             self._controller.algorithm = get_algorithm(algo_str)
             self._algo_name = algo_str
@@ -255,17 +271,6 @@ class ControlLoop:
             last_command_at=self._last_command_at,
         )
 
-    def _read_entity(self, entity_id, default=None):
-        """Read an entity's state string, returning default on missing."""
-        state = self._hass.states.get(entity_id)
-        if state is None or state.state in ("unknown", "unavailable", "", None):
-            return default
-        return state.state
-
-    def _read_target(self, entity_id, default):
-        """Read a number entity as float."""
-        raw = self._read_entity(entity_id, str(default))
-        try:
-            return float(raw)
-        except (ValueError, TypeError):
-            return default
+    def set_presence(self, presence: PresenceTracker | None) -> None:
+        """Set the presence tracker (called by __init__ after construction)."""
+        self._presence = presence
