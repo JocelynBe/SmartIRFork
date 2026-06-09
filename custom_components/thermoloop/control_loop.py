@@ -5,6 +5,8 @@ from __future__ import annotations
 import datetime as dt
 import logging
 
+from homeassistant.helpers.event import async_track_time_interval
+
 from .actuator import Actuator
 from .algorithms import get_algorithm
 from .const import (
@@ -14,6 +16,8 @@ from .const import (
     ATTR_MODE,
     ATTR_REASON,
     ATTR_TARGET,
+    DOMAIN,
+    EVENT_THERMOLOOP_COMMAND,
 )
 from .contracts import ACCommand, ACState, ControlInput, ControlMode, Fan, Mode
 from .controller import Controller
@@ -22,6 +26,8 @@ from .presence import PresenceTracker
 from .sensor import ThermoLoopStatusSensor
 
 _LOGGER = logging.getLogger(__name__)
+
+_TICK_INTERVAL_SECONDS = 60
 
 
 def _night_window_active(now, start_str, end_str):
@@ -63,10 +69,27 @@ class ControlLoop:
             algorithm=get_algorithm("v0"), guards=GuardConfig()
         )
         self._algo_name: str = "v0"
+        self._unsub_interval = None
+        self._interval = dt.timedelta(seconds=_TICK_INTERVAL_SECONDS)
 
     def _now(self):
         """Return current datetime. Override in tests to control time."""
         return dt.datetime.now()
+
+    def start(self) -> None:
+        """Start periodic tick scheduling."""
+        self._unsub_interval = async_track_time_interval(
+            self._hass, self._async_tick_wrapper, self._interval
+        )
+
+    def stop(self) -> None:
+        """Stop periodic tick scheduling."""
+        if self._unsub_interval is not None:
+            self._unsub_interval()
+            self._unsub_interval = None
+
+    async def _async_tick_wrapper(self, _now=None) -> None:
+        await self.async_tick()
 
     async def async_tick(self) -> None:
         """Execute one full control cycle."""
@@ -81,6 +104,15 @@ class ControlLoop:
             if decision.is_send:
                 cmd = decision.command
                 await self._actuator.apply(cmd)
+                self._hass.bus.async_fire(
+                    EVENT_THERMOLOOP_COMMAND,
+                    {
+                        "command": str(cmd),
+                        "reason": cmd.reason,
+                        "mode": ci.mode.value,
+                        "target": ci.target,
+                    },
+                )
                 self._status_sensor.update_state(
                     "active" if cmd.power else "off",
                     mode=ci.mode.value,
@@ -148,15 +180,14 @@ class ControlLoop:
         )
 
         night_start = self._read_entity(
-            f"time.thermoloop_night_start_{self._entry_id}"
+            f"time.thermoloop_night_window_start_{self._entry_id}"
         )
         night_end = self._read_entity(
-            f"time.thermoloop_night_end_{self._entry_id}"
+            f"time.thermoloop_night_window_end_{self._entry_id}"
         )
 
         is_night = _night_window_active(self._now(), night_start, night_end)
-        is_away = self._presence.is_away
-        target = night_target if (is_night and is_away) else day_target
+        target = night_target if is_night else day_target
 
         mode_str = self._read_entity(
             f"select.thermoloop_mode_{self._entry_id}", "auto"

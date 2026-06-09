@@ -1,4 +1,5 @@
 """Mock homeassistant modules for testing without a full HA install."""
+import asyncio
 import sys
 from unittest.mock import MagicMock, PropertyMock
 
@@ -30,6 +31,17 @@ ha_mod.helpers.entity_platform = types.ModuleType(
     "homeassistant.helpers.entity_platform"
 )
 ha_mod.helpers.entity_platform.AddEntitiesCallback = MagicMock
+
+ha_mod.helpers.event = types.ModuleType("homeassistant.helpers.event")
+
+def _mock_track_time_interval(hass, callback, interval):
+    if asyncio.iscoroutinefunction(callback):
+        asyncio.create_task(callback())
+    else:
+        callback()
+    return MagicMock()
+
+ha_mod.helpers.event.async_track_time_interval = _mock_track_time_interval
 
 ha_mod.components = types.ModuleType("homeassistant.components")
 ha_mod.components.sensor = types.ModuleType("homeassistant.components.sensor")
@@ -220,7 +232,7 @@ class MockTimeEntity:
     def async_write_ha_state(self):
         pass
 
-    def async_set_value(self, value: str) -> None:
+    def async_set_value(self, value) -> None:
         self._attr_native_value = value
         self.async_write_ha_state()
 
@@ -269,4 +281,4 @@ sys.modules["homeassistant.components.sensor"] = ha_mod.components.sensor
 sys.modules["homeassistant.components.number"] = ha_mod.components.number
 sys.modules["homeassistant.components.select"] = ha_mod.components.select
 sys.modules["homeassistant.components.time"] = ha_mod.components.time
-sys.modules["homeassistant.const"] = ha_mod.const
+sys.modules["homeassistant.helpers.event"] = ha_mod.helpers.event

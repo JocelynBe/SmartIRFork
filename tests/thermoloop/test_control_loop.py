@@ -77,8 +77,8 @@ async def test_async_tick_happy_path(mock_hass, mock_actuator, mock_sensor, mock
         "number.thermoloop_target_night_entry_id": _state("number.dummy", "24"),
         "select.thermoloop_mode_entry_id": _state("select.dummy", "auto"),
         "select.thermoloop_algorithm_entry_id": _state("select.dummy", "v0"),
-        "time.thermoloop_night_start_entry_id": _state("time.dummy", "23:00:00"),
-        "time.thermoloop_night_end_entry_id": _state("time.dummy", "07:00:00"),
+        "time.thermoloop_night_window_start_entry_id": _state("time.dummy", "23:00:00"),
+        "time.thermoloop_night_window_end_entry_id": _state("time.dummy", "07:00:00"),
     }
     mock_hass.states.get.side_effect = lambda eid: states.get(eid)
 
@@ -107,8 +107,8 @@ async def test_async_tick_away_and_night(mock_hass, mock_actuator, mock_sensor, 
         "number.thermoloop_target_night_entry_id": _state("number.dummy", "24"),
         "select.thermoloop_mode_entry_id": _state("select.dummy", "auto"),
         "select.thermoloop_algorithm_entry_id": _state("select.dummy", "v0"),
-        "time.thermoloop_night_start_entry_id": _state("time.dummy", "23:00:00"),
-        "time.thermoloop_night_end_entry_id": _state("time.dummy", "07:00:00"),
+        "time.thermoloop_night_window_start_entry_id": _state("time.dummy", "23:00:00"),
+        "time.thermoloop_night_window_end_entry_id": _state("time.dummy", "07:00:00"),
     }
     mock_hass.states.get.side_effect = lambda eid: states.get(eid)
 

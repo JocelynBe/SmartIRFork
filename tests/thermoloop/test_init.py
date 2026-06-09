@@ -15,6 +15,8 @@ def mock_hass():
     hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
     hass.services = MagicMock()
     hass.services.async_register = MagicMock()
+    hass.bus = MagicMock()
+    hass.bus.async_fire = MagicMock()
     return hass
 
 

@@ -16,9 +16,9 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-_MODE_OPTIONS = ["cool", "heat", "dry", "auto"]
-_ALGORITHM_OPTIONS = ["standard", "aggressive", "eco"]
-_DEFAULTS: dict[str, str] = {"mode": "cool", "algorithm": "standard"}
+_MODE_OPTIONS = ["auto", "off", "away"]
+_ALGORITHM_OPTIONS = ["v0", "v1"]
+_DEFAULTS: dict[str, str] = {"mode": "auto", "algorithm": "v0"}
 
 
 async def async_setup_entry(

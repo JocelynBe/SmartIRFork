@@ -1,4 +1,5 @@
 """Tests for ThermoLoop time entities."""
+import datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,7 +25,7 @@ def night_end(mock_hass):
 class TestNightStart:
 
     def test_default_value(self, night_start):
-        assert night_start.native_value == "23:00:00"
+        assert night_start.native_value == datetime.time(22, 0, 0)
 
     def test_name(self, night_start):
         assert night_start.name == "ThermoLoop Night Window Start"
@@ -36,7 +37,7 @@ class TestNightStart:
 class TestNightEnd:
 
     def test_default_value(self, night_end):
-        assert night_end.native_value == "07:00:00"
+        assert night_end.native_value == datetime.time(7, 0, 0)
 
     def test_name(self, night_end):
         assert night_end.name == "ThermoLoop Night Window End"
@@ -45,13 +46,15 @@ class TestNightEnd:
         assert night_end.unique_id == "thermoloop_night_window_end_entry_id"
 
 
-def test_set_night_start(mock_hass):
+@pytest.mark.asyncio
+async def test_set_night_start(mock_hass):
     entity = ThermoLoopNightWindowStart(mock_hass, "entry_id")
-    entity.async_set_value("22:00:00")
-    assert entity.native_value == "22:00:00"
+    await entity.async_set_value(datetime.time(22, 30, 0))
+    assert entity.native_value == datetime.time(22, 30, 0)
 
 
-def test_set_night_end(mock_hass):
+@pytest.mark.asyncio
+async def test_set_night_end(mock_hass):
     entity = ThermoLoopNightWindowEnd(mock_hass, "entry_id")
-    entity.async_set_value("06:30:00")
-    assert entity.native_value == "06:30:00"
+    await entity.async_set_value(datetime.time(6, 30, 0))
+    assert entity.native_value == datetime.time(6, 30, 0)
