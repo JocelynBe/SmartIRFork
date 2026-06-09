@@ -8,6 +8,14 @@ import types
 ha_mod = types.ModuleType("homeassistant")
 ha_mod.const = types.ModuleType("homeassistant.const")
 ha_mod.const.STATE_IDLE = "idle"
+
+class MockPlatform:
+    SENSOR = "sensor"
+    NUMBER = "number"
+    SELECT = "select"
+    TIME = "time"
+
+ha_mod.const.Platform = MockPlatform
 ha_mod.const.UnitOfTemperature = types.ModuleType("homeassistant.const.UnitOfTemperature")
 ha_mod.const.UnitOfTemperature.CELSIUS = "°C"
 
