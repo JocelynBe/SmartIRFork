@@ -1,5 +1,5 @@
 """Tests for ThermoLoop number entities."""
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -36,3 +36,13 @@ def test_target_day_default_value(mock_hass):
 def test_target_night_default_value(mock_hass):
     entity = ThermoLoopTargetNumber(mock_hass, "entry_id", "night")
     assert entity.native_value == 24.0
+
+
+@pytest.mark.asyncio
+async def test_set_target_value_awaits_write(mock_hass):
+    """async_set_native_value should await async_write_ha_state."""
+    entity = ThermoLoopTargetNumber(mock_hass, "entry_id", "day")
+    entity.async_write_ha_state = AsyncMock()
+    await entity.async_set_native_value(25.0)
+    assert entity.native_value == 25.0
+    entity.async_write_ha_state.assert_awaited()

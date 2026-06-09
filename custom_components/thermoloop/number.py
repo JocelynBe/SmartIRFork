@@ -53,4 +53,4 @@ class ThermoLoopTargetNumber(NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         """Set the target temperature."""
         self._attr_native_value = value
-        self.async_write_ha_state()
+        await self.async_write_ha_state()
