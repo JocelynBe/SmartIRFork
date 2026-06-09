@@ -40,13 +40,17 @@ def test_target_night_default_value(mock_hass):
 
 
 @pytest.mark.asyncio
-async def test_set_target_value_awaits_write(mock_hass):
-    """async_set_native_value should await async_write_ha_state."""
+async def test_set_target_value_writes_state(mock_hass):
+    """async_set_native_value updates the value and writes state synchronously.
+
+    HA's async_write_ha_state is a sync @callback, so it must be called, NOT
+    awaited (awaiting it raises 'NoneType object can't be awaited' in real HA).
+    """
     entity = ThermoLoopTargetNumber(mock_hass, "entry_id", "day")
-    entity.async_write_ha_state = AsyncMock()
+    entity.async_write_ha_state = MagicMock()
     await entity.async_set_native_value(25.0)
     assert entity.native_value == 25.0
-    entity.async_write_ha_state.assert_awaited()
+    entity.async_write_ha_state.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -85,7 +85,7 @@ class MockSensorEntity:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def async_write_ha_state(self):
+    def async_write_ha_state(self):
         pass
 
     @property
@@ -141,7 +141,7 @@ class MockNumberEntity:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def async_write_ha_state(self):
+    def async_write_ha_state(self):
         pass
 
     async def async_set_native_value(self, value: float) -> None:
@@ -225,7 +225,7 @@ class MockSelectEntity:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def async_write_ha_state(self):
+    def async_write_ha_state(self):
         pass
 
     def async_select_option(self, option: str) -> None:
@@ -279,12 +279,12 @@ class MockTimeEntity:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def async_write_ha_state(self):
+    def async_write_ha_state(self):
         pass
 
     async def async_set_value(self, value) -> None:
         self._attr_native_value = value
-        await self.async_write_ha_state()
+        self.async_write_ha_state()
 
     async def async_added_to_hass(self):
         pass
@@ -335,6 +335,14 @@ class MockRestoreEntity:
 ha_mod.helpers.restore_state = types.ModuleType("homeassistant.helpers.restore_state")
 ha_mod.helpers.restore_state.RestoreEntity = MockRestoreEntity
 
+# homeassistant.util.dt — provide tz-aware now()/utcnow() like real HA
+import datetime as _dt
+
+ha_mod.util = types.ModuleType("homeassistant.util")
+ha_mod.util.dt = types.ModuleType("homeassistant.util.dt")
+ha_mod.util.dt.now = lambda: _dt.datetime.now(_dt.timezone.utc)
+ha_mod.util.dt.utcnow = lambda: _dt.datetime.now(_dt.timezone.utc)
+
 ha_mod.components.select = types.ModuleType("homeassistant.components.select")
 ha_mod.components.select.SelectEntity = MockSelectEntity
 
@@ -349,6 +357,8 @@ sys.modules["homeassistant.config_entries"] = ha_mod.config_entries
 sys.modules["homeassistant.helpers"] = ha_mod.helpers
 sys.modules["homeassistant.helpers.entity_platform"] = ha_mod.helpers.entity_platform
 sys.modules["homeassistant.helpers.restore_state"] = ha_mod.helpers.restore_state
+sys.modules["homeassistant.util"] = ha_mod.util
+sys.modules["homeassistant.util.dt"] = ha_mod.util.dt
 sys.modules["homeassistant.components"] = ha_mod.components
 sys.modules["homeassistant.components.http"] = ha_mod.components.http
 sys.modules["homeassistant.components.frontend"] = ha_mod.components.frontend

@@ -239,6 +239,57 @@ async def test_async_tick_reports_sensor_age(mock_hass):
 
 
 @pytest.mark.asyncio
+async def test_async_tick_handles_tz_aware_last_updated(mock_hass):
+    """Regression: real HA state last_updated is tz-aware; _now() must be too.
+
+    With the default (un-patched) _now() the loop uses dt_util.now() (aware).
+    Subtracting an aware last_updated must NOT raise a naive/aware TypeError
+    and surface as a generic 'exception' tick failure.
+    """
+    actuator = AsyncMock()
+    actuator.apply.return_value = True
+    actuator.last_state = ACState(power=False, mode=Mode.COOL, setpoint=22, fan=Fan.LOW)
+    status = _make_status_sensor()
+    loop = ControlLoop(
+        hass=mock_hass,
+        entry_id="test_entry",
+        temp_sensor_day_entity_id="sensor.living_temp",
+        temp_sensor_night_entity_id="sensor.bedroom_temp",
+        actuator=actuator,
+        presence=_make_presence(),
+        status_sensor=status,
+    )
+
+    aware_updated = datetime(2024, 1, 1, 12, 0, 0, tzinfo=dt.timezone.utc)
+    def _get_state(entity_id):
+        if entity_id == "sensor.living_temp":
+            return MagicMock(state="23.5", last_updated=aware_updated)
+        return None
+    mock_hass.states.get = _get_state
+    mock_hass.data[DOMAIN]["test_entry"]["entities"] = {
+        "target_day": FakeEntity(native_value=22.0),
+        "target_night": FakeEntity(native_value=24.0),
+        "mode": FakeEntity(current_option="auto"),
+        "algorithm": FakeEntity(current_option="v0"),
+        "night_start": FakeEntity(native_value=dt.time(22, 0)),
+        "night_end": FakeEntity(native_value=dt.time(7, 0)),
+    }
+
+    # The production clock must be tz-aware to subtract from HA last_updated.
+    assert loop._now().tzinfo is not None
+
+    # Intentionally do NOT patch _now — exercise the real dt_util.now() path.
+    await loop.async_tick()
+
+    status.update_state.assert_called()
+    # Must not have failed with the naive/aware subtraction error.
+    for call in status.update_state.call_args_list:
+        assert call.kwargs.get("reason") != "exception"
+        if call.args:
+            assert call.args[0] != "error" or call.kwargs.get("reason") != "exception"
+
+
+@pytest.mark.asyncio
 async def test_async_tick_persists_assumed_state_from_actuator(mock_hass):
     cmd_sent = None
     class FakeActuator:

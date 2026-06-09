@@ -7,6 +7,7 @@ import datetime as dt
 import logging
 
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.util import dt as dt_util
 
 from custom_components.thermoloop.actuator import Actuator
 from custom_components.thermoloop.algorithms import get_algorithm
@@ -83,8 +84,12 @@ class ControlLoop:
         self._lock = asyncio.Lock()
 
     def _now(self):
-        """Return current datetime. Override in tests to control time."""
-        return dt.datetime.now()
+        """Return current timezone-aware datetime in HA's configured zone.
+
+        Aware (not naive) so it can be subtracted from HA state ``last_updated``
+        timestamps, which are timezone-aware UTC. Override in tests to control time.
+        """
+        return dt_util.now()
 
     def start(self) -> None:
         """Start periodic tick scheduling."""
@@ -218,6 +223,12 @@ class ControlLoop:
 
         sensor_last_updated = getattr(temp_state, "last_updated", None)
         if sensor_last_updated is not None:
+            # HA state timestamps are tz-aware; guard against a naive value so
+            # the subtraction never raises (offset-naive vs offset-aware).
+            if sensor_last_updated.tzinfo is None and now.tzinfo is not None:
+                sensor_last_updated = sensor_last_updated.replace(tzinfo=now.tzinfo)
+            elif sensor_last_updated.tzinfo is not None and now.tzinfo is None:
+                sensor_last_updated = sensor_last_updated.replace(tzinfo=None)
             sensor_age = (now - sensor_last_updated).total_seconds()
         else:
             sensor_age = 0.0
