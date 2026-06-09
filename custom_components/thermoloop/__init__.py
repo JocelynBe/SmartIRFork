@@ -53,7 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     actuator = Actuator(hass, broadlink_remote_id)
 
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {}
+    hass.data[DOMAIN][entry.entry_id] = {"assumed_state": None}
 
     # Forward setup to entity platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -65,7 +65,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     control_loop = ControlLoop(
         hass=hass,
         entry_id=entry.entry_id,
-        climate_entity_id=broadlink_remote_id,
         temp_sensor_day_entity_id=temp_sensor_day,
         temp_sensor_night_entity_id=temp_sensor_night,
         actuator=actuator,

@@ -9,7 +9,7 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from custom_components.thermoloop.actuator import Actuator
 from custom_components.thermoloop.algorithms import get_algorithm
-from custom_components.thermoloop.const import EVENT_THERMOLOOP_COMMAND
+from custom_components.thermoloop.const import DOMAIN, EVENT_THERMOLOOP_COMMAND
 from custom_components.thermoloop.contracts import ACState, ControlInput, ControlMode, Fan, Mode
 from custom_components.thermoloop.controller import Controller
 from custom_components.thermoloop.guards import GuardConfig
@@ -20,6 +20,10 @@ _LOGGER = logging.getLogger(__name__)
 
 _TICK_INTERVAL_SECONDS = 60
 _TREND_WINDOW = 5
+
+_SAFE_DEFAULT_STATE = ACState(
+    power=False, mode=Mode.COOL, setpoint=22, fan=Fan.LOW,
+)
 
 
 def _night_window_active(now, start_str, end_str):
@@ -44,7 +48,6 @@ class ControlLoop:
         self,
         hass,
         entry_id: str,
-        climate_entity_id: str,
         temp_sensor_day_entity_id: str,
         temp_sensor_night_entity_id: str,
         actuator: Actuator,
@@ -55,7 +58,6 @@ class ControlLoop:
     ) -> None:
         self._hass = hass
         self._entry_id = entry_id
-        self._climate_entity_id = climate_entity_id
         self._temp_sensor_day = temp_sensor_day_entity_id
         self._temp_sensor_night = temp_sensor_night_entity_id
         self._active_sensor_id: str | None = None
@@ -107,6 +109,10 @@ class ControlLoop:
                 cmd = decision.command
                 self._last_command_at = ci.now
                 await self._actuator.apply(cmd)
+                # Store assumed state from actuator
+                if self._actuator.last_state is not None:
+                    entry_data = self._hass.data.setdefault(DOMAIN, {}).setdefault(self._entry_id, {})
+                    entry_data["assumed_state"] = self._actuator.last_state
                 self._hass.bus.async_fire(
                     EVENT_THERMOLOOP_COMMAND,
                     {
@@ -147,6 +153,12 @@ class ControlLoop:
         if dt_min < 0.1:
             return 0.0
         return (last_temp - first_temp) / dt_min
+
+    def _assumed_state(self) -> ACState:
+        """Read the last-commanded AC state from hass.data."""
+        entry_data = self._hass.data.get(DOMAIN, {}).get(self._entry_id, {})
+        state = entry_data.get("assumed_state")
+        return state if state is not None else _SAFE_DEFAULT_STATE
 
     def _build_input(self):
         """Read HA entity states and build a ControlInput for the brain."""
@@ -199,29 +211,7 @@ class ControlLoop:
         self._temp_history.append((now.timestamp(), current_temp))
         self._temp_history = self._temp_history[-_TREND_WINDOW:]
 
-        climate = self._hass.states.get(self._climate_entity_id)
-        if climate is None or climate.state in ("unknown", "unavailable", "", None):
-            return None
-
-        attrs = climate.attributes
-        hvac_mode = attrs.get("hvac_mode") or climate.state
-        setpoint = int(attrs.get("temperature", 22))
-        fan_str = attrs.get("fan_mode", "low")
-
-        mode_map = {"cool": Mode.COOL, "heat": Mode.HEAT, "dry": Mode.DRY}
-        fan_map = {
-            "low": Fan.LOW,
-            "mid": Fan.MID,
-            "high": Fan.HIGH,
-            "highest": Fan.HIGHEST,
-        }
-
-        assumed = ACState(
-            power=hvac_mode not in ("off",),
-            mode=mode_map.get(hvac_mode, Mode.COOL),
-            setpoint=setpoint,
-            fan=fan_map.get(fan_str, Fan.LOW),
-        )
+        assumed = self._assumed_state()
 
         day_target = self._read_target(
             f"number.thermoloop_target_day_{self._entry_id}", 22.0

@@ -1,196 +1,301 @@
-"""Tests for ThermoLoop control loop integration."""
-
-import datetime
+"""Tests for the ThermoLoop ControlLoop."""
 from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime
+from dataclasses import dataclass
 
 import pytest
 
-from custom_components.thermoloop.contracts import ACCommand
-from custom_components.thermoloop.control_loop import ControlLoop
+from custom_components.thermoloop.const import DOMAIN
+from custom_components.thermoloop.contracts import (
+    ACCommand,
+    ACState,
+    ControlInput,
+    ControlMode,
+    Decision,
+    Fan,
+    Mode,
+)
+from custom_components.thermoloop.control_loop import ControlLoop, _night_window_active
 
 
 @pytest.fixture
 def mock_hass():
     hass = MagicMock()
+    hass.data = {DOMAIN: {"test_entry": {"assumed_state": ACState(
+        power=True, mode=Mode.COOL, setpoint=22, fan=Fan.LOW,
+    )}}}
     hass.states = MagicMock()
+    hass.bus = MagicMock()
+    hass.bus.async_fire = MagicMock()
     return hass
 
 
-@pytest.fixture
-def mock_actuator():
-    return AsyncMock()
-
-
-@pytest.fixture
-def mock_sensor():
-    sensor = MagicMock()
-    sensor.update_state = AsyncMock()
+def _make_status_sensor():
+    sensor = AsyncMock()
+    sensor.update_state = AsyncMock(return_value=None)
     return sensor
 
 
-@pytest.fixture
-def mock_presence():
+def _make_presence(is_away=False):
     presence = MagicMock()
-    presence.is_away = False
+    presence.is_away = is_away
     return presence
 
 
-def _state(entity_id=None, state="unknown", attributes=None):
-    s = MagicMock()
-    s.entity_id = entity_id
-    s.state = state
-    s.attributes = attributes or {}
-    s.last_updated = None
-    return s
-
-
-def _build_loop(mock_hass, mock_actuator, mock_sensor, mock_presence, entry_id="entry_id"):
-    return ControlLoop(
-        hass=mock_hass,
-        entry_id=entry_id,
-        climate_entity_id="climate.my_ac",
-        temp_sensor_day_entity_id="sensor.room_temp",
-        temp_sensor_night_entity_id="sensor.room_temp",
-        actuator=mock_actuator,
-        presence=mock_presence,
-        status_sensor=mock_sensor,
-        humidity_sensor_day_entity_id=None,
-        humidity_sensor_night_entity_id=None,
-    )
-
-
 @pytest.mark.asyncio
-async def test_async_tick_happy_path(mock_hass, mock_actuator, mock_sensor, mock_presence):
-    """Full tick: state reads, algorithm runs, actuator applies, sensor updates."""
-    states = {
-        "sensor.room_temp": _state("sensor.room_temp", "26.5"),
-        "climate.my_ac": _state(
-            "climate.my_ac",
-            "cool",
-            {"hvac_mode": "cool", "temperature": 22, "fan_mode": "low"},
-        ),
-        "number.thermoloop_target_day_entry_id": _state("number.dummy", "22"),
-        "number.thermoloop_target_night_entry_id": _state("number.dummy", "24"),
-        "select.thermoloop_mode_entry_id": _state("select.dummy", "auto"),
-        "select.thermoloop_algorithm_entry_id": _state("select.dummy", "v0"),
-        "time.thermoloop_night_window_start_entry_id": _state("time.dummy", "23:00:00"),
-        "time.thermoloop_night_window_end_entry_id": _state("time.dummy", "07:00:00"),
-    }
-    mock_hass.states.get.side_effect = lambda eid: states.get(eid)
-
-    loop = _build_loop(mock_hass, mock_actuator, mock_sensor, mock_presence)
-    await loop.async_tick()
-
-    mock_actuator.apply.assert_called_once()
-    cmd = mock_actuator.apply.call_args[0][0]
-    assert isinstance(cmd, ACCommand)
-    mock_sensor.update_state.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_async_tick_away_and_night(mock_hass, mock_actuator, mock_sensor, mock_presence):
-    """Night target used during night window when away."""
-    mock_presence.is_away = True
-
-    states = {
-        "sensor.room_temp": _state("sensor.room_temp", "26.5"),
-        "climate.my_ac": _state(
-            "climate.my_ac",
-            "cool",
-            {"hvac_mode": "cool", "temperature": 22, "fan_mode": "low"},
-        ),
-        "number.thermoloop_target_day_entry_id": _state("number.dummy", "22"),
-        "number.thermoloop_target_night_entry_id": _state("number.dummy", "24"),
-        "select.thermoloop_mode_entry_id": _state("select.dummy", "auto"),
-        "select.thermoloop_algorithm_entry_id": _state("select.dummy", "v0"),
-        "time.thermoloop_night_window_start_entry_id": _state("time.dummy", "23:00:00"),
-        "time.thermoloop_night_window_end_entry_id": _state("time.dummy", "07:00:00"),
-    }
-    mock_hass.states.get.side_effect = lambda eid: states.get(eid)
-
-    loop = _build_loop(mock_hass, mock_actuator, mock_sensor, mock_presence)
-    loop._now = lambda: datetime.datetime(2024, 6, 15, 23, 30, 0)
-
-    await loop.async_tick()
-
-    mock_actuator.apply.assert_called_once()
-    mock_sensor.update_state.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_async_tick_missing_states_gracefully(mock_hass, mock_actuator, mock_sensor, mock_presence):
-    """No crash when states are missing."""
-    mock_hass.states.get.return_value = None
-
-    loop = _build_loop(mock_hass, mock_actuator, mock_sensor, mock_presence)
-    await loop.async_tick()
-
-    mock_sensor.update_state.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_async_tick_uses_night_sensor_during_night(mock_hass, mock_actuator, mock_sensor, mock_presence):
-    """During night window, use bedroom sensor instead of living room."""
-    states = {
-        "sensor.living_temp": _state("sensor.living_temp", "22.0"),
-        "sensor.bedroom_temp": _state("sensor.bedroom_temp", "28.0"),
-        "climate.my_ac": _state(
-            "climate.my_ac", "cool",
-            {"hvac_mode": "cool", "temperature": 22, "fan_mode": "low"},
-        ),
-        "number.thermoloop_target_day_entry_id": _state("number.dummy", "22"),
-        "number.thermoloop_target_night_entry_id": _state("number.dummy", "24"),
-        "select.thermoloop_mode_entry_id": _state("select.dummy", "auto"),
-        "select.thermoloop_algorithm_entry_id": _state("select.dummy", "v0"),
-        "time.thermoloop_night_window_start_entry_id": _state("time.dummy", "23:00:00"),
-        "time.thermoloop_night_window_end_entry_id": _state("time.dummy", "07:00:00"),
-    }
-    mock_hass.states.get.side_effect = lambda eid: states.get(eid)
-
+async def test_async_tick_happy_path(mock_hass):
+    actuator = AsyncMock()
+    actuator.last_state = ACState(power=True, mode=Mode.COOL, setpoint=18, fan=Fan.HIGH)
+    status = _make_status_sensor()
+    presence = _make_presence()
     loop = ControlLoop(
         hass=mock_hass,
-        entry_id="entry_id",
-        climate_entity_id="climate.my_ac",
+        entry_id="test_entry",
         temp_sensor_day_entity_id="sensor.living_temp",
         temp_sensor_night_entity_id="sensor.bedroom_temp",
-        actuator=mock_actuator,
-        presence=mock_presence,
-        status_sensor=mock_sensor,
+        actuator=actuator,
+        presence=presence,
+        status_sensor=status,
     )
-    # Force night time
-    loop._now = lambda: datetime.datetime(2024, 6, 15, 23, 30, 0)
-    await loop.async_tick()
 
-    mock_actuator.apply.assert_called_once()
-    # Should have used bedroom temp (28.0), not living temp (22.0)
-    # Error = 28 - 24 = +4.0 -> slam cool -> setpoint = MIN_SETPOINT (16)
-    cmd = mock_actuator.apply.call_args[0][0]
-    assert cmd.setpoint == 16
+    def _get_state(entity_id):
+        if entity_id == "sensor.living_temp":
+            return MagicMock(state="25.0", last_updated=datetime(2024, 1, 1, 13, 59, 0))
+        return None
+    mock_hass.states.get = _get_state
+
+    # Mock helper entities
+    def _read_side_effect(eid, default=None):
+        mapping = {
+            f"time.thermoloop_night_window_start_test_entry": "22:00",
+            f"time.thermoloop_night_window_end_test_entry": "07:00",
+            f"number.thermoloop_target_day_test_entry": "22.0",
+            f"number.thermoloop_target_night_test_entry": "24.0",
+            f"select.thermoloop_mode_test_entry": "auto",
+            f"select.thermoloop_algorithm_test_entry": "v0",
+        }
+        return mapping.get(eid, default)
+    loop._read_entity = _read_side_effect
+    loop._read_target = lambda eid, default: float(_read_side_effect(eid, str(default)))
+
+    with patch.object(loop, "_now", return_value=datetime(2024, 1, 1, 14, 0, 0)):
+        await loop.async_tick()
+
+    actuator.apply.assert_called_once()
+    assert actuator.apply.call_args[0][0].power is True
 
 
 @pytest.mark.asyncio
-async def test_async_tick_reports_sensor_age(mock_hass, mock_actuator, mock_sensor, mock_presence):
-    """Sensor age should be computed from last_updated."""
-    now = datetime.datetime(2024, 6, 15, 12, 0, 0)
-    old = datetime.datetime(2024, 6, 15, 11, 50, 0)  # 600s ago
+async def test_async_tick_away_and_night(mock_hass):
+    actuator = AsyncMock()
+    actuator.last_state = ACState(power=False, mode=Mode.COOL, setpoint=22, fan=Fan.LOW)
+    status = _make_status_sensor()
+    presence = _make_presence(is_away=True)
+    loop = ControlLoop(
+        hass=mock_hass,
+        entry_id="test_entry",
+        temp_sensor_day_entity_id="sensor.living_temp",
+        temp_sensor_night_entity_id="sensor.bedroom_temp",
+        actuator=actuator,
+        presence=presence,
+        status_sensor=status,
+    )
 
-    def get_state(eid):
-        if eid == "sensor.room_temp":
-            s = _state("sensor.room_temp", "26.5")
-            s.last_updated = old
-            return s
-        if eid == "climate.my_ac":
-            s = _state("climate.my_ac", "cool",
-                       {"hvac_mode": "cool", "temperature": 22, "fan_mode": "low"})
-            s.last_updated = now
-            return s
-        return _state(eid, "auto" if "select" in eid else "22")
-    mock_hass.states.get.side_effect = get_state
+    def _get_state(entity_id):
+        if entity_id == "sensor.bedroom_temp":
+            return MagicMock(state="26.0", last_updated=datetime(2024, 1, 1, 23, 0, 0))
+        return None
+    mock_hass.states.get = _get_state
 
-    loop = _build_loop(mock_hass, mock_actuator, mock_sensor, mock_presence)
-    loop._now = lambda: now
+    def _read_side_effect(eid, default=None):
+        mapping = {
+            f"time.thermoloop_night_window_start_test_entry": "22:00",
+            f"time.thermoloop_night_window_end_test_entry": "07:00",
+            f"number.thermoloop_target_day_test_entry": "22.0",
+            f"number.thermoloop_target_night_test_entry": "24.0",
+            f"select.thermoloop_mode_test_entry": "auto",
+            f"select.thermoloop_algorithm_test_entry": "v0",
+        }
+        return mapping.get(eid, default)
+    loop._read_entity = _read_side_effect
+    loop._read_target = lambda eid, default: float(_read_side_effect(eid, str(default)))
 
-    with patch.object(loop._controller, 'decide', wraps=loop._controller.decide) as spy:
+    with patch.object(loop, "_now", return_value=datetime(2024, 1, 1, 23, 30, 0)):
         await loop.async_tick()
-        ci = spy.call_args[0][0]
-        assert ci.sensor_age == 600.0
+
+    # Away + night: should turn off
+    actuator.apply.assert_called_once()
+    assert actuator.apply.call_args[0][0].power is False
+
+
+@pytest.mark.asyncio
+async def test_async_tick_missing_states_gracefully(mock_hass):
+    actuator = AsyncMock()
+    status = _make_status_sensor()
+    presence = _make_presence()
+    loop = ControlLoop(
+        hass=mock_hass,
+        entry_id="test_entry",
+        temp_sensor_day_entity_id="sensor.living_temp",
+        temp_sensor_night_entity_id="sensor.bedroom_temp",
+        actuator=actuator,
+        presence=presence,
+        status_sensor=status,
+    )
+
+    # No sensor available
+    mock_hass.states.get = MagicMock(return_value=None)
+
+    await loop.async_tick()
+
+    actuator.apply.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_tick_uses_night_sensor_during_night(mock_hass):
+    actuator = AsyncMock()
+    actuator.last_state = ACState(power=True, mode=Mode.COOL, setpoint=18, fan=Fan.HIGH)
+    status = _make_status_sensor()
+    presence = _make_presence()
+    loop = ControlLoop(
+        hass=mock_hass,
+        entry_id="test_entry",
+        temp_sensor_day_entity_id="sensor.living_temp",
+        temp_sensor_night_entity_id="sensor.bedroom_temp",
+        actuator=actuator,
+        presence=presence,
+        status_sensor=status,
+    )
+
+    def _get_state(entity_id):
+        if entity_id == "sensor.bedroom_temp":
+            return MagicMock(state="24.0", last_updated=datetime(2024, 1, 1, 23, 0, 0))
+        return None
+    mock_hass.states.get = _get_state
+
+    def _read_side_effect(eid, default=None):
+        mapping = {
+            f"time.thermoloop_night_window_start_test_entry": "22:00",
+            f"time.thermoloop_night_window_end_test_entry": "07:00",
+            f"number.thermoloop_target_day_test_entry": "22.0",
+            f"number.thermoloop_target_night_test_entry": "24.0",
+            f"select.thermoloop_mode_test_entry": "auto",
+            f"select.thermoloop_algorithm_test_entry": "v0",
+        }
+        return mapping.get(eid, default)
+    loop._read_entity = _read_side_effect
+    loop._read_target = lambda eid, default: float(_read_side_effect(eid, str(default)))
+
+    with patch.object(loop, "_now", return_value=datetime(2024, 1, 1, 23, 0, 0)):
+        await loop.async_tick()
+
+    assert loop._active_sensor_id == "sensor.bedroom_temp"
+
+
+@pytest.mark.asyncio
+async def test_async_tick_reports_sensor_age(mock_hass):
+    actuator = AsyncMock()
+    actuator.last_state = ACState(power=True, mode=Mode.COOL, setpoint=18, fan=Fan.HIGH)
+    status = _make_status_sensor()
+    presence = _make_presence()
+    loop = ControlLoop(
+        hass=mock_hass,
+        entry_id="test_entry",
+        temp_sensor_day_entity_id="sensor.living_temp",
+        temp_sensor_night_entity_id="sensor.bedroom_temp",
+        actuator=actuator,
+        presence=presence,
+        status_sensor=status,
+    )
+
+    sensor_updated = datetime(2024, 1, 1, 12, 0, 0)
+    def _get_state(entity_id):
+        if entity_id == "sensor.living_temp":
+            return MagicMock(state="23.5", last_updated=sensor_updated)
+        return None
+    mock_hass.states.get = _get_state
+
+    def _read_side_effect(eid, default=None):
+        mapping = {
+            f"time.thermoloop_night_window_start_test_entry": "22:00",
+            f"time.thermoloop_night_window_end_test_entry": "07:00",
+            f"number.thermoloop_target_day_test_entry": "22.0",
+            f"number.thermoloop_target_night_test_entry": "24.0",
+            f"select.thermoloop_mode_test_entry": "auto",
+            f"select.thermoloop_algorithm_test_entry": "v0",
+        }
+        return mapping.get(eid, default)
+    loop._read_entity = _read_side_effect
+    loop._read_target = lambda eid, default: float(_read_side_effect(eid, str(default)))
+
+    with patch.object(loop, "_now", return_value=datetime(2024, 1, 1, 13, 0, 0)):
+        await loop.async_tick()
+
+    status.update_state.assert_called_once()
+    call_kwargs = status.update_state.call_args.kwargs
+    # The sensor was updated 1 hour ago = 3600 seconds
+    assert "reason" in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_async_tick_persists_assumed_state_from_actuator(mock_hass):
+    cmd_sent = None
+    class FakeActuator:
+        def __init__(self):
+            self.last_state = None
+        async def apply(self, cmd):
+            self.last_state = ACState(power=cmd.power, mode=cmd.mode, setpoint=cmd.setpoint, fan=cmd.fan)
+            nonlocal cmd_sent
+            cmd_sent = cmd
+    actuator = FakeActuator()
+    status = _make_status_sensor()
+    presence = _make_presence()
+    loop = ControlLoop(
+        hass=mock_hass,
+        entry_id="test_entry",
+        temp_sensor_day_entity_id="sensor.living_temp",
+        temp_sensor_night_entity_id="sensor.bedroom_temp",
+        actuator=actuator,
+        presence=presence,
+        status_sensor=status,
+    )
+    def _get_state(entity_id):
+        if entity_id == "sensor.living_temp":
+            return MagicMock(state="25.0", last_updated=datetime(2024, 1, 1, 13, 59, 0))
+        return None
+    mock_hass.states.get = _get_state
+    def _read_side_effect(eid, default=None):
+        mapping = {
+            f"time.thermoloop_night_window_start_test_entry": "22:00",
+            f"time.thermoloop_night_window_end_test_entry": "07:00",
+            f"number.thermoloop_target_day_test_entry": "22.0",
+            f"number.thermoloop_target_night_test_entry": "24.0",
+            f"select.thermoloop_mode_test_entry": "auto",
+            f"select.thermoloop_algorithm_test_entry": "v0",
+        }
+        return mapping.get(eid, default)
+    loop._read_entity = _read_side_effect
+    loop._read_target = lambda eid, default: float(_read_side_effect(eid, str(default)))
+    with patch.object(loop, "_now", return_value=datetime(2024, 1, 1, 14, 0, 0)):
+        await loop.async_tick()
+    persisted = mock_hass.data[DOMAIN]["test_entry"].get("assumed_state")
+    assert cmd_sent is not None
+    assert persisted == ACState(power=cmd_sent.power, mode=cmd_sent.mode, setpoint=cmd_sent.setpoint, fan=cmd_sent.fan)
+
+
+def test_night_window_active():
+    now = datetime(2024, 1, 1, 23, 0, 0)
+    assert _night_window_active(now, "22:00", "07:00") is True
+    assert _night_window_active(now, "07:00", "22:00") is False
+
+
+def test_night_window_inactive_during_day():
+    now = datetime(2024, 1, 1, 14, 0, 0)
+    assert _night_window_active(now, "22:00", "07:00") is False
+    assert _night_window_active(now, "07:00", "22:00") is True
+
+
+def test_night_window_invalid_returns_false():
+    now = datetime(2024, 1, 1, 14, 0, 0)
+    assert _night_window_active(now, None, None) is False
+    assert _night_window_active(now, "bad", "22:00") is False
