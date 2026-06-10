@@ -512,3 +512,56 @@ def test_build_input_celsius_sensor_unchanged(mock_hass):
         ci = loop._build_input()
     assert ci is not None
     assert ci.current_temp == pytest.approx(25.0)
+
+
+def _loop_with_mutable_temp(mock_hass, holder):
+    actuator = AsyncMock()
+    actuator.last_state = ACState(power=False, mode=Mode.COOL, setpoint=22, fan=Fan.LOW)
+    loop = ControlLoop(
+        hass=mock_hass, entry_id="test_entry",
+        temp_sensor_day_entity_id="sensor.living_temp",
+        temp_sensor_night_entity_id="sensor.bedroom_temp",
+        actuator=actuator, presence=_make_presence(), status_sensor=_make_status_sensor(),
+    )
+
+    def _get_state(entity_id):
+        if entity_id == "sensor.living_temp":
+            return MagicMock(
+                state=holder["v"],
+                last_updated=datetime(2024, 1, 1, 13, 59, 30),
+                attributes={},
+            )
+        return None
+    mock_hass.states.get = _get_state
+    mock_hass.data[DOMAIN]["test_entry"]["entities"] = {
+        "target_day": FakeEntity(native_value=22.0),
+        "target_night": FakeEntity(native_value=24.0),
+        "mode": FakeEntity(current_option="auto"),
+        "algorithm": FakeEntity(current_option="v0"),
+        "night_start": FakeEntity(native_value=dt.time(22, 0)),
+        "night_end": FakeEntity(native_value=dt.time(7, 0)),
+    }
+    return loop
+
+
+def test_build_input_falls_back_to_cached_temp_when_unavailable(mock_hass):
+    """A sensor that drops to 'unavailable' reuses its last good reading."""
+    holder = {"v": "23.0"}
+    loop = _loop_with_mutable_temp(mock_hass, holder)
+    with patch.object(loop, "_now", return_value=datetime(2024, 1, 1, 14, 0, 0)):
+        ci1 = loop._build_input()
+        assert ci1 is not None and ci1.current_temp == pytest.approx(23.0)
+        holder["v"] = "unavailable"
+        ci2 = loop._build_input()
+    assert ci2 is not None
+    assert ci2.current_temp == pytest.approx(23.0)  # served from cache
+
+
+def test_build_input_unavailable_without_cache_returns_none(mock_hass):
+    """Unavailable with no prior good reading still aborts the tick."""
+    holder = {"v": "unavailable"}
+    loop = _loop_with_mutable_temp(mock_hass, holder)
+    with patch.object(loop, "_now", return_value=datetime(2024, 1, 1, 14, 0, 0)):
+        ci = loop._build_input()
+    assert ci is None
+    assert "sensor_unavailable" in getattr(loop, "_incomplete_reason", "")

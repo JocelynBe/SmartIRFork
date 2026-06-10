@@ -81,6 +81,10 @@ class ControlLoop:
         self._interval = dt.timedelta(seconds=_TICK_INTERVAL_SECONDS)
         self._last_command_at: float | None = None
         self._temp_history: list[tuple[float, float]] = []
+        # Last good (Celsius) reading + its timestamp per sensor, so a sensor
+        # that drops to "unavailable" between reports (common for battery
+        # sensors that only report on change) doesn't abort the tick.
+        self._last_good_temp: dict = {}
         self._lock = asyncio.Lock()
 
     def _now(self):
@@ -260,36 +264,49 @@ class ControlLoop:
         self._active_sensor_id = active_sensor_id
 
         temp_state = self._hass.states.get(active_sensor_id)
-        if temp_state is None or temp_state.state in (
+        current_temp = None
+        sensor_last_updated = None
+        if temp_state is not None and temp_state.state not in (
             "unknown",
             "unavailable",
             "",
             None,
         ):
-            observed = "missing" if temp_state is None else temp_state.state
-            self._incomplete_reason = f"sensor_unavailable:{active_sensor_id}={observed}"
-            _LOGGER.debug(
-                "tick aborted: %s sensor %s is %s",
-                "night" if is_night else "day", active_sensor_id, observed,
-            )
-            return None
-        try:
-            current_temp = float(temp_state.state)
-        except (ValueError, TypeError):
-            self._incomplete_reason = f"sensor_non_numeric:{active_sensor_id}={temp_state.state!r}"
-            _LOGGER.debug(
-                "tick aborted: sensor %s value %r is not numeric",
-                active_sensor_id, temp_state.state,
-            )
-            return None
+            try:
+                current_temp = float(temp_state.state)
+            except (ValueError, TypeError):
+                current_temp = None
 
-        # Normalize the reading to Celsius. ThermoLoop reasons entirely in
-        # degrees C (targets, deadband, IR setpoints), but a sensor may report
-        # in Fahrenheit (unit_of_measurement "°F"); without converting, a 70°F
-        # room reads as 70°C and the loop slam-cools against a ~22°C target.
-        temp_unit = (temp_state.attributes or {}).get("unit_of_measurement")
-        if isinstance(temp_unit, str) and temp_unit.strip().upper().endswith("F"):
-            current_temp = (current_temp - 32.0) * 5.0 / 9.0
+        if current_temp is not None:
+            # Normalize the reading to Celsius. ThermoLoop reasons entirely in
+            # degrees C (targets, deadband, IR setpoints), but a sensor may
+            # report in Fahrenheit (unit_of_measurement "°F"); without
+            # converting, a 70°F room reads as 70°C and the loop slam-cools.
+            temp_unit = (temp_state.attributes or {}).get("unit_of_measurement")
+            if isinstance(temp_unit, str) and temp_unit.strip().upper().endswith("F"):
+                current_temp = (current_temp - 32.0) * 5.0 / 9.0
+            sensor_last_updated = getattr(temp_state, "last_updated", None)
+            self._last_good_temp[active_sensor_id] = (current_temp, sensor_last_updated)
+        else:
+            # The sensor is unavailable/unknown/non-numeric. Many battery temp
+            # sensors only report on change and drop to "unavailable" when
+            # stable, so fall back to the last good reading for THIS sensor
+            # rather than aborting; the staleness guard (sensor_age below) still
+            # holds if that reading is too old.
+            cached = self._last_good_temp.get(active_sensor_id)
+            if cached is None:
+                observed = "missing" if temp_state is None else temp_state.state
+                self._incomplete_reason = f"sensor_unavailable:{active_sensor_id}={observed}"
+                _LOGGER.debug(
+                    "tick aborted: %s sensor %s is %s and no cached reading",
+                    "night" if is_night else "day", active_sensor_id, observed,
+                )
+                return None
+            current_temp, sensor_last_updated = cached
+            _LOGGER.debug(
+                "sensor %s unavailable; using last-good %.2f°C",
+                active_sensor_id, current_temp,
+            )
 
         # Read humidity from phase-appropriate sensor
         humidity_entity = self._humidity_night if is_night else self._humidity_day
@@ -303,7 +320,7 @@ class ControlLoop:
                     pass
         self._current_humidity = current_humidity
 
-        sensor_last_updated = getattr(temp_state, "last_updated", None)
+        # sensor_last_updated was set above from the live reading or the cache.
         if sensor_last_updated is not None:
             # HA state timestamps are tz-aware; guard against a naive value so
             # the subtraction never raises (offset-naive vs offset-aware).
