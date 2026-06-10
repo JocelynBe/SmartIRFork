@@ -463,16 +463,21 @@ class ThermoLoopPanel extends LitElement {
 
       const changes = result[this._sensorIds.status] || [];
       const events = [];
-      let prevState = null;
+      let prevKey = null;
       let lastAttrs = {};
       for (const c of changes) {
         if (c.a) lastAttrs = c.a;
         const state = c.s;
-        const ts = (c.lc ?? c.lu) * 1000;
-        if (state === prevState) continue;
-        prevState = state;
-        // Show the signal we actually sent the AC (mode + setpoint + fan) when
-        // it's running, then the reason.
+        // last_updated (lu): reflects attribute-only changes too, so a new
+        // command that keeps state "active" but changes the setpoint gets its
+        // own timestamp.
+        const ts = (c.lu ?? c.lc) * 1000;
+        // De-dupe by the actual SIGNAL, not just state — otherwise a new cool
+        // command issued while already "active" (a real beep) is swallowed.
+        const key = `${state}|${lastAttrs.setpoint ?? ""}|${lastAttrs.fan ?? ""}|${lastAttrs.mode ?? ""}`;
+        if (key === prevKey) continue;
+        prevKey = key;
+        // Show the signal we actually sent the AC (mode + setpoint + fan).
         let signal = "";
         if ((state === "active" || state === "off") && lastAttrs.setpoint != null) {
           const mode = lastAttrs.mode || "cool";
