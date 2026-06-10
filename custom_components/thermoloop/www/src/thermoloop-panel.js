@@ -1,8 +1,8 @@
 import { LitElement, html, css } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 
-const RANGE_LABELS = { "6h": "6h", "24h": "24h", "7d": "7d" };
-const RANGE_MS = { "6h": 6 * 3600 * 1000, "24h": 24 * 3600 * 1000, "7d": 7 * 24 * 3600 * 1000 };
+const RANGE_LABELS = { "1h": "1h", "6h": "6h", "24h": "24h", "7d": "7d" };
+const RANGE_MS = { "1h": 3600 * 1000, "6h": 6 * 3600 * 1000, "24h": 24 * 3600 * 1000, "7d": 7 * 24 * 3600 * 1000 };
 
 class ThermoLoopPanel extends LitElement {
   static styles = css`
