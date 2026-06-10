@@ -268,7 +268,7 @@ class ThermoLoopPanel extends LitElement {
     let signal = "";
     if (d.power !== false && d.setpoint != null) {
       const fan = d.fan ? ` ${d.fan}` : "";
-      signal = ` ${d.ac_mode || "cool"} ${Number(d.setpoint).toFixed(0)}°C${fan}`;
+      signal = ` ${d.mode || "cool"} ${Number(d.setpoint).toFixed(0)}°C${fan}`;
     }
     const reason = d.reason ? ` — ${d.reason}` : "";
     const entry = {
@@ -514,7 +514,7 @@ class ThermoLoopPanel extends LitElement {
         // Show the signal we actually sent the AC (mode + setpoint + fan).
         let signal = "";
         if ((state === "active" || state === "off") && lastAttrs.setpoint != null) {
-          const mode = lastAttrs.ac_mode || "cool";
+          const mode = lastAttrs.mode || "cool";
           const fan = lastAttrs.fan ? ` ${lastAttrs.fan}` : "";
           signal = ` ${mode} ${Number(lastAttrs.setpoint).toFixed(0)}°C${fan}`;
         }

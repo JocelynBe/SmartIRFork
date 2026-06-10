@@ -15,7 +15,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from custom_components.thermoloop.const import (
-    ATTR_AC_MODE,
     ATTR_ACTIVE_SENSOR,
     ATTR_ALGORITHM,
     ATTR_CURRENT_TEMP,
@@ -76,7 +75,6 @@ class ThermoLoopStatusSensor(SensorEntity):
         reason: str | None = None,
         setpoint: float | None = None,
         fan: str | None = None,
-        ac_mode: str | None = None,
         day_sensor: str | None = None,
         night_sensor: str | None = None,
     ) -> None:
@@ -101,8 +99,6 @@ class ThermoLoopStatusSensor(SensorEntity):
             attrs[ATTR_SETPOINT] = setpoint
         if fan is not None:
             attrs[ATTR_FAN] = fan
-        if ac_mode is not None:
-            attrs[ATTR_AC_MODE] = ac_mode
         if day_sensor is not None:
             attrs[ATTR_DAY_SENSOR] = day_sensor
         if night_sensor is not None:

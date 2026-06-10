@@ -167,7 +167,6 @@ class ControlLoop:
                                 "power": cmd.power,
                                 "setpoint": cmd.setpoint if cmd.power else None,
                                 "fan": cmd.fan.value if cmd.power else None,
-                                "ac_mode": cmd.mode.value if cmd.power else None,
                             },
                         )
                         if self._status_sensor:
@@ -182,7 +181,6 @@ class ControlLoop:
                                 reason=cmd.reason,
                                 setpoint=cmd.setpoint if cmd.power else None,
                                 fan=cmd.fan.value if cmd.power else None,
-                                ac_mode=cmd.mode.value if cmd.power else None,
                                 day_sensor=self._temp_sensor_day,
                                 night_sensor=self._temp_sensor_night,
                             )
@@ -213,7 +211,6 @@ class ControlLoop:
                             reason=decision.reason,
                             setpoint=assumed.setpoint if assumed.power else None,
                             fan=assumed.fan.value if assumed.power else None,
-                            ac_mode=assumed.mode.value if assumed.power else None,
                             day_sensor=self._temp_sensor_day,
                             night_sensor=self._temp_sensor_night,
                         )

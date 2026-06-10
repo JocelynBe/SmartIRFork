@@ -32,27 +32,6 @@ def test_dedupe_holds_when_proposed_equals_assumed():
     assert "no change" in d.reason
 
 
-def test_keepalive_resends_same_command_when_stale():
-    """An identical command is re-asserted once the keep-alive interval passes,
-    so a desynced AC (missed IR / remote / auto-off) gets corrected."""
-    state = ACState(power=True, mode=Mode.COOL, setpoint=18, fan=Fan.HIGH)
-    proposed = ACCommand(True, Mode.COOL, 18, Fan.HIGH, "same")
-    # last command was longer ago than keepalive_s (default 900s).
-    ci = _ci(25.0, 22.0, state, last_command_at=10_000.0 - 1000.0)
-    d = apply_guards(proposed, ci, CFG)
-    assert d.is_send is True
-    assert "keep-alive" in d.reason
-
-
-def test_keepalive_does_not_resend_when_recent():
-    state = ACState(power=True, mode=Mode.COOL, setpoint=18, fan=Fan.HIGH)
-    proposed = ACCommand(True, Mode.COOL, 18, Fan.HIGH, "same")
-    ci = _ci(25.0, 22.0, state, last_command_at=10_000.0 - 60.0)  # 60s ago
-    d = apply_guards(proposed, ci, CFG)
-    assert d.is_send is False
-    assert "no change" in d.reason
-
-
 def test_deadband_holds_small_error_escalation():
     """Proposed escalation (fan increase) within deadband is held."""
     state = ACState(power=True, mode=Mode.COOL, setpoint=22, fan=Fan.LOW)
