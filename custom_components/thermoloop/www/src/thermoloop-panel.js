@@ -242,7 +242,7 @@ class ThermoLoopPanel extends LitElement {
   }
 
   // Centered moving average over a ±windowMs/2 time window (display-only).
-  _smooth(points, windowMs = 15 * 60 * 1000) {
+  _smooth(points, windowMs = 5 * 60 * 1000) {
     if (!points || points.length === 0) return [];
     const half = windowMs / 2;
     const out = new Array(points.length);
@@ -286,6 +286,20 @@ class ThermoLoopPanel extends LitElement {
     if (!this.hass) return;
     this._fetchHistory();
     this._fetchEvents();
+  }
+
+  // Convert a temperature reading to Celsius based on its source unit. The
+  // panel reasons in °C everywhere; sensors/weather may report °F.
+  _toC(value, unit) {
+    const n = typeof value === "string" ? parseFloat(value) : value;
+    if (n == null || isNaN(n)) return null;
+    return (typeof unit === "string" && unit.toUpperCase().includes("F")) ? (n - 32) * 5 / 9 : n;
+  }
+
+  // An entity's unit attribute (unit_of_measurement, or e.g. temperature_unit).
+  _unitOf(entityId, attr = "unit_of_measurement") {
+    const s = entityId && this.hass && this.hass.states[entityId];
+    return s && s.attributes ? s.attributes[attr] : null;
   }
 
   async _fetchHistory() {
@@ -346,13 +360,15 @@ class ThermoLoopPanel extends LitElement {
       let statusHistory = [];
       for (const [entityId, changes] of Object.entries(result)) {
         if (entityId === weatherId) {
-          // Read temperature from the attributes, carrying forward the last
-          // known value across points that omit `a`.
+          // Temperature is in the weather entity's unit (often °F); normalize
+          // to °C, carrying forward the last known value across points that
+          // omit `a`.
+          const wUnit = this._unitOf(weatherId, "temperature_unit") || this._unitOf(weatherId);
           let lastTemp = null;
           history.external = changes.map(c => {
             if (c.a && c.a.temperature != null) {
-              const parsed = parseFloat(c.a.temperature);
-              if (!isNaN(parsed)) lastTemp = parsed;
+              const parsed = this._toC(c.a.temperature, wUnit);
+              if (parsed != null) lastTemp = parsed;
             }
             return { t: (c.lu ?? c.lc) * 1000, v: lastTemp };
           }).filter(p => p.v != null && !isNaN(p.v) && p.t > 0);
@@ -366,8 +382,13 @@ class ThermoLoopPanel extends LitElement {
             .filter(p => p.t > 0);
           continue;
         }
+        // Temp sensors may report °F (e.g. the Broadlink built-in sensor);
+        // normalize every point to °C so the curves match the °C targets.
         const bucket = history.living.length <= history.bedroom.length ? "living" : "bedroom";
-        history[bucket] = numeric(changes);
+        const sensorUnit = this._unitOf(entityId);
+        history[bucket] = numeric(changes)
+          .map(p => ({ t: p.t, v: this._toC(p.v, sensorUnit) }))
+          .filter(p => p.v != null);
       }
       this._targetHistory = targetHistory;
       this._statusHistory = statusHistory;
@@ -417,7 +438,8 @@ class ThermoLoopPanel extends LitElement {
           type: state === "error" ? "leave" : "command",
         });
       }
-      this._events = events.slice(-100);
+      // Most recent first.
+      this._events = events.slice(-100).reverse();
     } catch (e) {
       console.warn("ThermoLoop: status history fetch failed", e);
       this._events = [];
@@ -791,7 +813,10 @@ class ThermoLoopPanel extends LitElement {
     const statusTemp = this._statusValue("current_temp");
     const statusTarget = this._statusValue("target");
     const statusPresence = this._entityState(this._findEntity("select.thermoloop_mode"), "auto");
-    const outdoorTemp = this._entityAttr(this._sensorIds.weather, "temperature");
+    const outdoorTemp = this._toC(
+      this._entityAttr(this._sensorIds.weather, "temperature"),
+      this._entityAttr(this._sensorIds.weather, "temperature_unit"),
+    );
     const dayDisplay = this._toDisplay(dayTarget);
     const nightDisplay = this._toDisplay(nightTarget);
     const stepTarget = (current, deltaDisplay, setter) => {
