@@ -69,6 +69,7 @@ class ThermoLoopPanel extends LitElement {
       display: inline-block;
     }
     .graph-legend .swatch.dashed { border-top-style: dashed; }
+    .graph-legend .swatch.block { width: 14px; height: 11px; border-top: none; border-radius: 2px; }
     .graph-empty {
       height: 260px;
       display: flex;
@@ -196,7 +197,9 @@ class ThermoLoopPanel extends LitElement {
     this._logCollapsed = false;
     this._events = [];
     this._tempHistory = { living: [], bedroom: [], external: [] };
-    this._sensorIds = { tempDay: null, tempNight: null, status: null, mode: null, algorithm: null, dayTarget: null, nightTarget: null, weather: null };
+    this._targetHistory = { day: [], night: [] };  // setpoint history -> step line
+    this._statusHistory = [];                       // [{t, state}] -> active shading
+    this._sensorIds = { tempDay: null, tempNight: null, status: null, mode: null, algorithm: null, dayTarget: null, nightTarget: null, weather: null, nightStart: null, nightEnd: null };
     this._disconnected = false;
   }
 
@@ -263,6 +266,8 @@ class ThermoLoopPanel extends LitElement {
       if (entityId.startsWith("select.thermoloop_algorithm")) this._sensorIds.algorithm = entityId;
       if (entityId.startsWith("number.thermoloop_target_day")) this._sensorIds.dayTarget = entityId;
       if (entityId.startsWith("number.thermoloop_target_night")) this._sensorIds.nightTarget = entityId;
+      if (entityId.startsWith("time.thermoloop_night_window_start")) this._sensorIds.nightStart = entityId;
+      if (entityId.startsWith("time.thermoloop_night_window_end")) this._sensorIds.nightEnd = entityId;
     }
     // First weather.* entity exposing a numeric temperature attribute.
     if (!this._sensorIds.weather) {
@@ -308,7 +313,11 @@ class ThermoLoopPanel extends LitElement {
     }
 
     const weatherId = this._sensorIds.weather;
-    const requestedIds = weatherId ? [...tempSensors, weatherId] : [...tempSensors];
+    const dayTargetId = this._sensorIds.dayTarget;
+    const nightTargetId = this._sensorIds.nightTarget;
+    const statusId = this._sensorIds.status;
+    const extraIds = [weatherId, dayTargetId, nightTargetId, statusId].filter(Boolean);
+    const requestedIds = [...tempSensors, ...extraIds];
 
     if (requestedIds.length === 0) return;
 
@@ -328,7 +337,13 @@ class ThermoLoopPanel extends LitElement {
       // history/history_during_period returns the compressed WS format:
       // each point is { s: state, lu: last_updated, lc: last_changed, a: attrs }
       // with timestamps in epoch SECONDS.
+      const numeric = changes => changes
+        .map(c => ({ t: (c.lu ?? c.lc) * 1000, v: parseFloat(c.s) }))
+        .filter(p => !isNaN(p.v) && p.t > 0);
+
       const history = { living: [], bedroom: [], external: [] };
+      const targetHistory = { day: [], night: [] };
+      let statusHistory = [];
       for (const [entityId, changes] of Object.entries(result)) {
         if (entityId === weatherId) {
           // Read temperature from the attributes, carrying forward the last
@@ -343,12 +358,19 @@ class ThermoLoopPanel extends LitElement {
           }).filter(p => p.v != null && !isNaN(p.v) && p.t > 0);
           continue;
         }
+        if (entityId === dayTargetId) { targetHistory.day = numeric(changes); continue; }
+        if (entityId === nightTargetId) { targetHistory.night = numeric(changes); continue; }
+        if (entityId === statusId) {
+          statusHistory = changes
+            .map(c => ({ t: (c.lu ?? c.lc) * 1000, state: c.s }))
+            .filter(p => p.t > 0);
+          continue;
+        }
         const bucket = history.living.length <= history.bedroom.length ? "living" : "bedroom";
-        history[bucket] = changes.map(c => ({
-          t: (c.lu ?? c.lc) * 1000,
-          v: parseFloat(c.s),
-        })).filter(p => !isNaN(p.v) && p.t > 0);
+        history[bucket] = numeric(changes);
       }
+      this._targetHistory = targetHistory;
+      this._statusHistory = statusHistory;
       this._tempHistory = history;
     } catch (e) {
       console.warn("ThermoLoop: history fetch failed", e);
@@ -512,21 +534,30 @@ class ThermoLoopPanel extends LitElement {
     const plotW = w - pad.left - pad.right;
     const plotH = h - pad.top - pad.bottom;
 
-    let allTemps = [], allTimes = [];
-    for (const s of series) for (const p of s.data) { allTemps.push(p.v); allTimes.push(p.t); }
-
-    const minTemp = Math.floor(Math.min(...allTemps) - 1);
-    const maxTemp = Math.ceil(Math.max(...allTemps) + 1);
+    let allTimes = [];
+    for (const s of series) for (const p of s.data) allTimes.push(p.t);
     const minTime = Math.min(...allTimes);
     const maxTime = Math.max(...allTimes);
     const timeRange = Math.max(maxTime - minTime, 1);
+
+    // Overlays spanning the same x-range: the historical day/night target step
+    // function and the regions where the AC was active.
+    const targetSteps = this._buildTargetSteps(minTime, maxTime);
+    const activeRegions = this._activeRegions(minTime, maxTime);
+
+    let allTemps = [];
+    for (const s of series) for (const p of s.data) allTemps.push(p.v);
+    for (const p of targetSteps) allTemps.push(p.v);  // keep the target line in view
+
+    const minTemp = Math.floor(Math.min(...allTemps) - 1);
+    const maxTemp = Math.ceil(Math.max(...allTemps) + 1);
 
     const xScale = t => pad.left + ((t - minTime) / timeRange) * plotW;
     const yScale = v => pad.top + plotH - ((v - minTemp) / (maxTemp - minTemp)) * plotH;
 
     // Cache geometry so the crosshair can repaint without recomputing.
     this._plot = { ctx, w, h, pad, plotW, plotH, series, xScale, yScale,
-                   minTemp, maxTemp, minTime, timeRange };
+                   minTemp, maxTemp, minTime, maxTime, timeRange, targetSteps, activeRegions };
 
     this._paint(this._hoverX != null ? this._hoverX : null);
   }
@@ -561,13 +592,93 @@ class ThermoLoopPanel extends LitElement {
     return data[data.length - 1].v;
   }
 
+  // Minutes-of-day for a `time.*` entity's "HH:MM:SS" state, or null.
+  _parseTimeEntity(entityId) {
+    if (!entityId || !this.hass || !this.hass.states[entityId]) return null;
+    const s = this.hass.states[entityId].state;
+    if (!s || typeof s !== "string") return null;
+    const parts = s.split(":");
+    if (parts.length < 2) return null;
+    const h = parseInt(parts[0], 10), m = parseInt(parts[1], 10);
+    if (isNaN(h) || isNaN(m)) return null;
+    return h * 60 + m;
+  }
+
+  // Is the local time-of-day at `ms` within the night window? Wrap-aware.
+  _isNightAt(ms, nightStart, nightEnd) {
+    if (nightStart == null || nightEnd == null) return false;
+    const d = new Date(ms);
+    const cur = d.getHours() * 60 + d.getMinutes();
+    if (nightStart <= nightEnd) return cur >= nightStart && cur < nightEnd;
+    return cur >= nightStart || cur < nightEnd;  // wraps past midnight
+  }
+
+  // Step (last-value-at-or-before) lookup over a time-sorted {t,v} history.
+  _stepValueAt(history, t) {
+    if (!history || history.length === 0) return null;
+    if (t <= history[0].t) return history[0].v;
+    let v = history[0].v;
+    for (const p of history) {
+      if (p.t <= t) v = p.v; else break;
+    }
+    return v;
+  }
+
+  // Reconstruct the active setpoint over [t0,t1] as samples {t, v, night}:
+  // day target during the day window, night target during the night window,
+  // each stepping at the user's historical edits. Dense sampling keeps the
+  // day/night boundary crossings and edit steps crisp enough to draw.
+  _buildTargetSteps(t0, t1) {
+    const dayH = this._targetHistory.day, nightH = this._targetHistory.night;
+    if (dayH.length === 0 && nightH.length === 0) return [];
+    const nightStart = this._parseTimeEntity(this._sensorIds.nightStart);
+    const nightEnd = this._parseTimeEntity(this._sensorIds.nightEnd);
+    const N = 400;
+    const stepMs = (t1 - t0) / N;
+    const out = [];
+    for (let i = 0; i <= N; i++) {
+      const t = t0 + i * stepMs;
+      const night = this._isNightAt(t, nightStart, nightEnd);
+      let v = this._stepValueAt(night ? nightH : dayH, t);
+      if (v == null) v = this._stepValueAt(night ? dayH : nightH, t);
+      if (v == null) continue;
+      out.push({ t, v, night });
+    }
+    return out;
+  }
+
+  // Intervals where the status sensor reported "active", clamped to [t0,t1].
+  _activeRegions(t0, t1) {
+    const h = this._statusHistory;
+    if (!h || h.length === 0) return [];
+    const sorted = [...h].sort((a, b) => a.t - b.t);
+    const regions = [];
+    for (let i = 0; i < sorted.length; i++) {
+      if (sorted[i].state !== "active") continue;
+      const start = Math.max(sorted[i].t, t0);
+      const end = Math.min(i + 1 < sorted.length ? sorted[i + 1].t : t1, t1);
+      if (end > start) regions.push({ t0: start, t1: end });
+    }
+    return regions;
+  }
+
   _paint(hoverX) {
     const p = this._plot;
     if (!p) return;
     const { ctx, w, h, pad, plotW, plotH, series, xScale, yScale,
-            minTemp, maxTemp, minTime, timeRange } = p;
+            minTemp, maxTemp, minTime, maxTime, timeRange, targetSteps, activeRegions } = p;
 
     ctx.clearRect(0, 0, w, h);
+
+    // Active regions: faint green band behind everything for each period the
+    // AC was running (from the status sensor's history).
+    if (activeRegions && activeRegions.length) {
+      ctx.fillStyle = "rgba(76,175,80,0.13)";
+      for (const r of activeRegions) {
+        const x0 = xScale(r.t0), x1 = xScale(r.t1);
+        if (x1 > x0) ctx.fillRect(x0, pad.top, x1 - x0, plotH);
+      }
+    }
 
     // Grid
     ctx.strokeStyle = "rgba(0,0,0,0.06)";
@@ -611,19 +722,20 @@ class ThermoLoopPanel extends LitElement {
       ctx.setLineDash([]);
     }
 
-    // Target line from status
-    const target = this._statusValue("target");
-    if (target && target !== "—") {
-      const targetY = yScale(parseFloat(target));
-      ctx.strokeStyle = "rgba(0,0,0,0.25)";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath(); ctx.moveTo(pad.left, targetY); ctx.lineTo(w - pad.right, targetY); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.font = "10px sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText(`Target ${this._fmtTemp(target)}`, w - pad.right - 70, targetY - 4);
+    // Target setpoint as a step function: day target (yellow) during the day
+    // window, night target (purple) during the night window, stepping at each
+    // historical user edit. Drawn horizontal-then-vertical for crisp steps.
+    if (targetSteps && targetSteps.length > 1) {
+      ctx.lineWidth = 1.5;
+      for (let i = 1; i < targetSteps.length; i++) {
+        const a = targetSteps[i - 1], b = targetSteps[i];
+        ctx.strokeStyle = a.night ? "#9c27b0" : "#fbc02d";
+        ctx.beginPath();
+        ctx.moveTo(xScale(a.t), yScale(a.v));
+        ctx.lineTo(xScale(b.t), yScale(a.v));
+        ctx.lineTo(xScale(b.t), yScale(b.v));
+        ctx.stroke();
+      }
     }
 
     // Hover crosshair: vertical bar + interpolated colored dot/value per line
@@ -740,6 +852,17 @@ class ThermoLoopPanel extends LitElement {
             <span class="item ${classMap({ off: this._tempHistory.external.length === 0 })}"
                   style="color:#4caf50">
               <span class="swatch dashed"></span><span style="color:var(--primary-text-color)">Outdoor</span>
+            </span>
+            <span class="item ${classMap({ off: this._targetHistory.day.length === 0 })}"
+                  style="color:#fbc02d">
+              <span class="swatch"></span><span style="color:var(--primary-text-color)">Target (day)</span>
+            </span>
+            <span class="item ${classMap({ off: this._targetHistory.night.length === 0 })}"
+                  style="color:#9c27b0">
+              <span class="swatch"></span><span style="color:var(--primary-text-color)">Target (night)</span>
+            </span>
+            <span class="item ${classMap({ off: this._statusHistory.length === 0 })}">
+              <span class="swatch block" style="background:rgba(76,175,80,0.4)"></span><span>Active</span>
             </span>
           </div>
           <div class="range-chips">
