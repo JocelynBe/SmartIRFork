@@ -19,3 +19,7 @@ ATTR_ACTIVE_SENSOR = "active_sensor"
 ATTR_CURRENT_TEMP = "current_temp"
 ATTR_HUMIDITY = "humidity"
 ATTR_REASON = "reason"
+ATTR_SETPOINT = "setpoint"       # the temperature commanded to the AC
+ATTR_FAN = "fan"                 # the fan speed commanded to the AC
+ATTR_DAY_SENSOR = "day_sensor"   # day/living temp sensor entity_id
+ATTR_NIGHT_SENSOR = "night_sensor"  # night/bedroom temp sensor entity_id

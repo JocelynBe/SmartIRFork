@@ -160,9 +160,23 @@ class ThermoLoopPanel extends LitElement {
       text-transform: uppercase;
       letter-spacing: 0.5px;
       opacity: 0.6;
-      cursor: pointer;
       user-select: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
+    .log-refresh { cursor: pointer; font-size: 1.2em; opacity: 0.7; }
+    .log-refresh:hover { opacity: 1; }
+    .smooth-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      justify-content: center;
+      margin-top: 10px;
+      font-size: 0.78em;
+      opacity: 0.8;
+    }
+    .smooth-row input[type="range"] { flex: 0 1 180px; }
     .log-card.collapsed .log-entries { display: none; }
     .log-entries { display: flex; flex-direction: column; gap: 4px; }
     .log-entry {
@@ -189,6 +203,7 @@ class ThermoLoopPanel extends LitElement {
     _logCollapsed: { state: true },
     _events: { state: true },
     _tempHistory: { state: true },
+    _smoothMin: { state: true },
   };
 
   constructor() {
@@ -197,6 +212,7 @@ class ThermoLoopPanel extends LitElement {
     this._logCollapsed = false;
     this._events = [];
     this._tempHistory = { living: [], bedroom: [], external: [] };
+    this._smoothMin = 5;                            // curve smoothing window (minutes)
     this._targetHistory = { day: [], night: [] };  // setpoint history -> step line
     this._statusHistory = [];                       // [{t, state}] -> active shading
     this._sensorIds = { tempDay: null, tempNight: null, status: null, mode: null, algorithm: null, dayTarget: null, nightTarget: null, weather: null, nightStart: null, nightEnd: null };
@@ -206,12 +222,16 @@ class ThermoLoopPanel extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     this._disconnected = true;
+    if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
   }
 
   connectedCallback() {
     super.connectedCallback();
     this._discoverEntities();
     this._fetchData();
+    // Poll so the graph + event log stay current without a manual reload
+    // (recorder history lags live state by a few seconds).
+    if (!this._pollTimer) this._pollTimer = setInterval(() => this._fetchData(), 20000);
   }
 
   updated(changedProps) {
@@ -219,7 +239,8 @@ class ThermoLoopPanel extends LitElement {
       this._discoverEntities();
       this._fetchData();
     }
-    if (changedProps.has("_tempHistory") || changedProps.has("_range")) {
+    if (changedProps.has("_tempHistory") || changedProps.has("_range")
+        || changedProps.has("_smoothMin")) {
       this._renderGraph();
     }
   }
@@ -242,8 +263,9 @@ class ThermoLoopPanel extends LitElement {
   }
 
   // Centered moving average over a ±windowMs/2 time window (display-only).
-  _smooth(points, windowMs = 5 * 60 * 1000) {
+  _smooth(points, windowMs = (this._smoothMin || 0) * 60 * 1000) {
     if (!points || points.length === 0) return [];
+    if (windowMs <= 0) return points;  // smoothing off
     const half = windowMs / 2;
     const out = new Array(points.length);
     let lo = 0, hi = 0, sum = 0;
@@ -307,18 +329,19 @@ class ThermoLoopPanel extends LitElement {
     const now = new Date();
     const start = new Date(now.getTime() - RANGE_MS[this._range]);
 
-    // Find temp sensors from status entity attributes
+    // Both temp sensors come from the status sensor's day_sensor/night_sensor
+    // attributes so both curves plot (not just the currently-active one).
+    const statusAttrs = (this._sensorIds.status && this.hass.states[this._sensorIds.status]
+      && this.hass.states[this._sensorIds.status].attributes) || {};
+    const daySensor = statusAttrs.day_sensor || statusAttrs.active_sensor || null;
+    const nightSensor = statusAttrs.night_sensor || null;
+
     let tempSensors = [];
-    if (this._sensorIds.status) {
-      const statusState = this.hass.states[this._sensorIds.status];
-      if (statusState && statusState.attributes) {
-        const activeId = statusState.attributes.active_sensor;
-        if (activeId) tempSensors.push(activeId);
-      }
-    }
+    if (daySensor) tempSensors.push(daySensor);
+    if (nightSensor && nightSensor !== daySensor) tempSensors.push(nightSensor);
 
     if (tempSensors.length === 0) {
-      // Try to discover by scanning states
+      // Fallback: scan for temperature sensors.
       for (const [id, stateObj] of Object.entries(this.hass.states)) {
         if (stateObj.attributes && stateObj.attributes.device_class === "temperature") {
           tempSensors.push(id);
@@ -377,14 +400,24 @@ class ThermoLoopPanel extends LitElement {
         if (entityId === dayTargetId) { targetHistory.day = numeric(changes); continue; }
         if (entityId === nightTargetId) { targetHistory.night = numeric(changes); continue; }
         if (entityId === statusId) {
-          statusHistory = changes
-            .map(c => ({ t: (c.lu ?? c.lc) * 1000, state: c.s }))
-            .filter(p => p.t > 0);
+          // Capture state + the AC commanded setpoint over time (carry the
+          // setpoint forward across points that omit attributes).
+          let lastSp = null;
+          statusHistory = changes.map(c => {
+            if (c.a && c.a.setpoint != null) {
+              const sp = parseFloat(c.a.setpoint);
+              if (!isNaN(sp)) lastSp = sp;
+            }
+            return { t: (c.lu ?? c.lc) * 1000, state: c.s, setpoint: lastSp };
+          }).filter(p => p.t > 0);
           continue;
         }
-        // Temp sensors may report °F (e.g. the Broadlink built-in sensor);
-        // normalize every point to °C so the curves match the °C targets.
-        const bucket = history.living.length <= history.bedroom.length ? "living" : "bedroom";
+        // Temp sensors: map day->living, night->bedroom by identity (falling
+        // back to a fill heuristic when ids are unknown). Normalize °F→°C.
+        let bucket;
+        if (nightSensor && entityId === nightSensor && entityId !== daySensor) bucket = "bedroom";
+        else if (daySensor && entityId === daySensor) bucket = "living";
+        else bucket = history.living.length <= history.bedroom.length ? "living" : "bedroom";
         const sensorUnit = this._unitOf(entityId);
         history[bucket] = numeric(changes)
           .map(p => ({ t: p.t, v: this._toC(p.v, sensorUnit) }))
@@ -431,10 +464,18 @@ class ThermoLoopPanel extends LitElement {
         const ts = (c.lc ?? c.lu) * 1000;
         if (state === prevState) continue;
         prevState = state;
+        // Show the signal we actually sent the AC (mode + setpoint + fan) when
+        // it's running, then the reason.
+        let signal = "";
+        if ((state === "active" || state === "off") && lastAttrs.setpoint != null) {
+          const mode = lastAttrs.mode || "cool";
+          const fan = lastAttrs.fan ? ` ${lastAttrs.fan}` : "";
+          signal = ` ${mode} ${Number(lastAttrs.setpoint).toFixed(0)}°C${fan}`;
+        }
         const reason = lastAttrs.reason ? ` — ${lastAttrs.reason}` : "";
         events.push({
           time: new Date(ts).toLocaleTimeString(),
-          detail: `${state}${reason}`,
+          detail: `${state}${signal}${reason}`,
           type: state === "error" ? "leave" : "command",
         });
       }
@@ -562,14 +603,18 @@ class ThermoLoopPanel extends LitElement {
     const maxTime = Math.max(...allTimes);
     const timeRange = Math.max(maxTime - minTime, 1);
 
-    // Overlays spanning the same x-range: the historical day/night target step
-    // function and the regions where the AC was active.
+    // Overlays spanning the same x-range: our day/night target step function,
+    // the AC's commanded setpoint over time, and the active regions.
     const targetSteps = this._buildTargetSteps(minTime, maxTime);
     const activeRegions = this._activeRegions(minTime, maxTime);
+    const acSetpoints = (this._statusHistory || [])
+      .filter(p => p.setpoint != null && p.t >= minTime && p.t <= maxTime)
+      .map(p => ({ t: p.t, v: p.setpoint }));
 
     let allTemps = [];
     for (const s of series) for (const p of s.data) allTemps.push(p.v);
     for (const p of targetSteps) allTemps.push(p.v);  // keep the target line in view
+    for (const p of acSetpoints) allTemps.push(p.v);  // and the AC setpoint line
 
     const minTemp = Math.floor(Math.min(...allTemps) - 1);
     const maxTemp = Math.ceil(Math.max(...allTemps) + 1);
@@ -578,8 +623,8 @@ class ThermoLoopPanel extends LitElement {
     const yScale = v => pad.top + plotH - ((v - minTemp) / (maxTemp - minTemp)) * plotH;
 
     // Cache geometry so the crosshair can repaint without recomputing.
-    this._plot = { ctx, w, h, pad, plotW, plotH, series, xScale, yScale,
-                   minTemp, maxTemp, minTime, maxTime, timeRange, targetSteps, activeRegions };
+    this._plot = { ctx, w, h, pad, plotW, plotH, series, xScale, yScale, minTemp,
+                   maxTemp, minTime, maxTime, timeRange, targetSteps, activeRegions, acSetpoints };
 
     this._paint(this._hoverX != null ? this._hoverX : null);
   }
@@ -687,8 +732,8 @@ class ThermoLoopPanel extends LitElement {
   _paint(hoverX) {
     const p = this._plot;
     if (!p) return;
-    const { ctx, w, h, pad, plotW, plotH, series, xScale, yScale,
-            minTemp, maxTemp, minTime, maxTime, timeRange, targetSteps, activeRegions } = p;
+    const { ctx, w, h, pad, plotW, plotH, series, xScale, yScale, minTemp, maxTemp,
+            minTime, maxTime, timeRange, targetSteps, activeRegions, acSetpoints } = p;
 
     ctx.clearRect(0, 0, w, h);
 
@@ -758,6 +803,24 @@ class ThermoLoopPanel extends LitElement {
         ctx.lineTo(xScale(b.t), yScale(b.v));
         ctx.stroke();
       }
+    }
+
+    // AC commanded setpoint over time (what we actually told the AC to cool to)
+    // — a stepped red line, distinct from our day/night target above.
+    if (acSetpoints && acSetpoints.length > 0) {
+      ctx.strokeStyle = "#e53935";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(xScale(acSetpoints[0].t), yScale(acSetpoints[0].v));
+      for (let i = 1; i < acSetpoints.length; i++) {
+        const x = xScale(acSetpoints[i].t);
+        ctx.lineTo(x, yScale(acSetpoints[i - 1].v));  // hold previous value
+        ctx.lineTo(x, yScale(acSetpoints[i].v));      // step to new value
+      }
+      const last = acSetpoints[acSetpoints.length - 1];
+      ctx.lineTo(xScale(maxTime), yScale(last.v));    // extend to now
+      ctx.stroke();
     }
 
     // Hover crosshair: vertical bar + interpolated colored dot/value per line
@@ -886,6 +949,10 @@ class ThermoLoopPanel extends LitElement {
                   style="color:#9c27b0">
               <span class="swatch"></span><span style="color:var(--primary-text-color)">Target (night)</span>
             </span>
+            <span class="item ${classMap({ off: (this._statusHistory || []).every(p => p.setpoint == null) })}"
+                  style="color:#e53935">
+              <span class="swatch"></span><span style="color:var(--primary-text-color)">AC setpoint</span>
+            </span>
             <span class="item ${classMap({ off: this._statusHistory.length === 0 })}">
               <span class="swatch block" style="background:rgba(76,175,80,0.4)"></span><span>Active</span>
             </span>
@@ -895,6 +962,11 @@ class ThermoLoopPanel extends LitElement {
               <div class="range-chip ${classMap({ active: this._range === key })}"
                    @click=${() => this._rangeHistory(key)} role="button">${label}</div>
             `)}
+          </div>
+          <div class="smooth-row">
+            <span>Smoothing: ${this._smoothMin} min</span>
+            <input type="range" min="0" max="30" step="1" .value=${String(this._smoothMin)}
+                   @input=${e => { this._smoothMin = parseInt(e.target.value, 10); }} />
           </div>
         </div>
 
@@ -940,8 +1012,12 @@ class ThermoLoopPanel extends LitElement {
 
         <!-- Event log -->
         <div class="log-card ${classMap({ collapsed: this._logCollapsed })}">
-          <h3 @click=${() => this._logCollapsed = !this._logCollapsed}>
-            ${this._logCollapsed ? "▶" : "▼"} Event Log (${this._events.length})
+          <h3>
+            <span @click=${() => this._logCollapsed = !this._logCollapsed} style="cursor:pointer">
+              ${this._logCollapsed ? "▶" : "▼"} Event Log (${this._events.length})
+            </span>
+            <span class="log-refresh" title="Refresh"
+                  @click=${() => this._fetchData()}>⟳</span>
           </h3>
           <div class="log-entries">
             ${this._events.length === 0

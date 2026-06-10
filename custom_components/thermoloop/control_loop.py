@@ -168,6 +168,10 @@ class ControlLoop:
                                 current_temp=ci.current_temp,
                                 humidity=self._current_humidity,
                                 reason=cmd.reason,
+                                setpoint=cmd.setpoint if cmd.power else None,
+                                fan=cmd.fan.value if cmd.power else None,
+                                day_sensor=self._temp_sensor_day,
+                                night_sensor=self._temp_sensor_night,
                             )
                     else:
                         # Actuator failed to send command
@@ -176,8 +180,13 @@ class ControlLoop:
                             await self._status_sensor.update_state("error", reason="actuator_failed")
                 else:
                     if self._status_sensor:
+                        # Reflect the actual AC state, not just "no command this
+                        # tick": if the AC is (assumed) running, the panel should
+                        # read "active" even while we hold; only show idle when
+                        # the AC is off.
+                        assumed = ci.assumed_state
                         await self._status_sensor.update_state(
-                            "idle",
+                            "active" if assumed.power else "idle",
                             mode=ci.mode.value,
                             algorithm=self._algo_name,
                             target=ci.target,
@@ -185,6 +194,10 @@ class ControlLoop:
                             current_temp=ci.current_temp,
                             humidity=self._current_humidity,
                             reason=decision.reason,
+                            setpoint=assumed.setpoint if assumed.power else None,
+                            fan=assumed.fan.value if assumed.power else None,
+                            day_sensor=self._temp_sensor_day,
+                            night_sensor=self._temp_sensor_night,
                         )
             except Exception as exc:
                 _LOGGER.exception("Control tick failed")

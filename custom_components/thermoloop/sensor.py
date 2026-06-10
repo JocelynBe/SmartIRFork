@@ -18,9 +18,13 @@ from custom_components.thermoloop.const import (
     ATTR_ACTIVE_SENSOR,
     ATTR_ALGORITHM,
     ATTR_CURRENT_TEMP,
+    ATTR_DAY_SENSOR,
+    ATTR_FAN,
     ATTR_HUMIDITY,
     ATTR_MODE,
+    ATTR_NIGHT_SENSOR,
     ATTR_REASON,
+    ATTR_SETPOINT,
     ATTR_TARGET,
     DOMAIN,
 )
@@ -69,6 +73,10 @@ class ThermoLoopStatusSensor(SensorEntity):
         current_temp: float | None = None,
         humidity: float | None = None,
         reason: str | None = None,
+        setpoint: float | None = None,
+        fan: str | None = None,
+        day_sensor: str | None = None,
+        night_sensor: str | None = None,
     ) -> None:
         """Update the sensor state and attributes."""
         self._attr_native_value = state
@@ -87,5 +95,13 @@ class ThermoLoopStatusSensor(SensorEntity):
             attrs[ATTR_HUMIDITY] = humidity
         if reason is not None:
             attrs[ATTR_REASON] = reason
+        if setpoint is not None:
+            attrs[ATTR_SETPOINT] = setpoint
+        if fan is not None:
+            attrs[ATTR_FAN] = fan
+        if day_sensor is not None:
+            attrs[ATTR_DAY_SENSOR] = day_sensor
+        if night_sensor is not None:
+            attrs[ATTR_NIGHT_SENSOR] = night_sensor
         self._attributes = attrs
         self.async_write_ha_state()
