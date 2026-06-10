@@ -51,7 +51,24 @@ class ThermoLoopPanel extends LitElement {
       height: 260px;
       display: block;
       border-radius: 8px;
+      cursor: crosshair;
     }
+    .graph-legend {
+      display: flex;
+      gap: 20px;
+      justify-content: center;
+      margin-top: 10px;
+      font-size: 0.78em;
+      opacity: 0.85;
+    }
+    .graph-legend .item { display: flex; align-items: center; gap: 7px; }
+    .graph-legend .item.off { opacity: 0.35; }
+    .graph-legend .swatch {
+      width: 18px;
+      border-top: 3px solid currentColor;
+      display: inline-block;
+    }
+    .graph-legend .swatch.dashed { border-top-style: dashed; }
     .graph-empty {
       height: 260px;
       display: flex;
@@ -394,6 +411,7 @@ class ThermoLoopPanel extends LitElement {
   _renderGraph() {
     const canvas = this.shadowRoot && this.shadowRoot.getElementById("tempChart");
     if (!canvas) return;
+    this._bindCrosshair(canvas);
 
     const ctx = canvas.getContext("2d");
     const dpr = window.devicePixelRatio || 1;
@@ -402,15 +420,20 @@ class ThermoLoopPanel extends LitElement {
     const h = rect.height;
     canvas.width = w * dpr;
     canvas.height = h * dpr;
-    ctx.scale(dpr, dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    ctx.clearRect(0, 0, w, h);
-
+    // Build series with time-sorted data (sorted once, reused for crosshair).
     const series = [];
-    if (this._tempHistory.living.length > 0) series.push({ data: this._tempHistory.living, color: "#03a9f4", label: "Living", lineDash: [] });
-    if (this._tempHistory.bedroom.length > 0) series.push({ data: this._tempHistory.bedroom, color: "#ff9800", label: "Bedroom", lineDash: [6, 4] });
+    if (this._tempHistory.living.length > 0)
+      series.push({ key: "living", color: "#03a9f4", label: "Living", lineDash: [],
+                    data: [...this._tempHistory.living].sort((a, b) => a.t - b.t) });
+    if (this._tempHistory.bedroom.length > 0)
+      series.push({ key: "bedroom", color: "#ff9800", label: "Bedroom", lineDash: [6, 4],
+                    data: [...this._tempHistory.bedroom].sort((a, b) => a.t - b.t) });
 
     if (series.length === 0 || series.every(s => s.data.length < 2)) {
+      this._plot = null;
+      ctx.clearRect(0, 0, w, h);
       ctx.fillStyle = "#999";
       ctx.font = "14px sans-serif";
       ctx.textAlign = "center";
@@ -422,17 +445,8 @@ class ThermoLoopPanel extends LitElement {
     const plotW = w - pad.left - pad.right;
     const plotH = h - pad.top - pad.bottom;
 
-    // Collect all temps and times
-    let allTemps = [];
-    let allTimes = [];
-    for (const s of series) {
-      for (const p of s.data) {
-        allTemps.push(p.v);
-        allTimes.push(p.t);
-      }
-    }
-
-    if (allTemps.length === 0) return;
+    let allTemps = [], allTimes = [];
+    for (const s of series) for (const p of s.data) { allTemps.push(p.v); allTimes.push(p.t); }
 
     const minTemp = Math.floor(Math.min(...allTemps) - 1);
     const maxTemp = Math.ceil(Math.max(...allTemps) + 1);
@@ -443,7 +457,52 @@ class ThermoLoopPanel extends LitElement {
     const xScale = t => pad.left + ((t - minTime) / timeRange) * plotW;
     const yScale = v => pad.top + plotH - ((v - minTemp) / (maxTemp - minTemp)) * plotH;
 
-    // Grid lines
+    // Cache geometry so the crosshair can repaint without recomputing.
+    this._plot = { ctx, w, h, pad, plotW, plotH, series, xScale, yScale,
+                   minTemp, maxTemp, minTime, timeRange };
+
+    this._paint(this._hoverX != null ? this._hoverX : null);
+  }
+
+  _bindCrosshair(canvas) {
+    if (canvas._thermoBound) return;
+    canvas._thermoBound = true;
+    canvas.addEventListener("mousemove", (e) => {
+      if (!this._plot) return;
+      const rect = canvas.getBoundingClientRect();
+      const { pad, w } = this._plot;
+      const x = Math.max(pad.left, Math.min(w - pad.right, e.clientX - rect.left));
+      this._hoverX = x;
+      this._paint(x);
+    });
+    canvas.addEventListener("mouseleave", () => {
+      this._hoverX = null;
+      this._paint(null);
+    });
+  }
+
+  _valueAtTime(data, t) {
+    // Linear interpolation of value at time t; null if t is outside the range.
+    if (data.length === 0 || t < data[0].t || t > data[data.length - 1].t) return null;
+    for (let i = 1; i < data.length; i++) {
+      if (data[i].t >= t) {
+        const a = data[i - 1], b = data[i];
+        const f = (t - a.t) / ((b.t - a.t) || 1);
+        return a.v + (b.v - a.v) * f;
+      }
+    }
+    return data[data.length - 1].v;
+  }
+
+  _paint(hoverX) {
+    const p = this._plot;
+    if (!p) return;
+    const { ctx, w, h, pad, plotW, plotH, series, xScale, yScale,
+            minTemp, maxTemp, minTime, timeRange } = p;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Grid
     ctx.strokeStyle = "rgba(0,0,0,0.06)";
     ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
@@ -467,23 +526,19 @@ class ThermoLoopPanel extends LitElement {
       const t = minTime + (timeRange / 4) * i;
       const x = pad.left + (plotW / 4) * i;
       const d = new Date(t);
-      const label = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      ctx.fillText(label, x, h - 6);
+      ctx.fillText(d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), x, h - 6);
     }
 
-    // Draw series
+    // Series lines
     for (const s of series) {
       if (s.data.length < 2) continue;
       ctx.strokeStyle = s.color;
       ctx.lineWidth = 2;
       ctx.setLineDash(s.lineDash);
       ctx.beginPath();
-      const sorted = [...s.data].sort((a, b) => a.t - b.t);
-      for (let i = 0; i < sorted.length; i++) {
-        const x = xScale(sorted[i].t);
-        const y = yScale(sorted[i].v);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+      for (let i = 0; i < s.data.length; i++) {
+        const x = xScale(s.data[i].t), y = yScale(s.data[i].v);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
       ctx.stroke();
       ctx.setLineDash([]);
@@ -496,15 +551,47 @@ class ThermoLoopPanel extends LitElement {
       ctx.strokeStyle = "rgba(0,0,0,0.25)";
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(pad.left, targetY);
-      ctx.lineTo(w - pad.right, targetY);
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(pad.left, targetY); ctx.lineTo(w - pad.right, targetY); ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = "rgba(0,0,0,0.35)";
       ctx.font = "10px sans-serif";
       ctx.textAlign = "left";
       ctx.fillText(`Target ${target}°C`, w - pad.right - 70, targetY - 4);
+    }
+
+    // Hover crosshair: vertical bar + interpolated colored dot/value per line
+    if (hoverX != null) {
+      const t = minTime + ((hoverX - pad.left) / plotW) * timeRange;
+
+      ctx.strokeStyle = "rgba(0,0,0,0.35)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(hoverX, pad.top); ctx.lineTo(hoverX, pad.top + plotH); ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.font = "10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                   hoverX, pad.top + 10);
+
+      const labelRight = hoverX > w - pad.right - 50;
+      for (const s of series) {
+        const v = this._valueAtTime(s.data, t);
+        if (v == null) continue;
+        const y = yScale(v);
+        ctx.beginPath();
+        ctx.arc(hoverX, y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = s.color;
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "#fff";
+        ctx.stroke();
+        ctx.fillStyle = s.color;
+        ctx.font = "bold 11px sans-serif";
+        ctx.textAlign = labelRight ? "right" : "left";
+        ctx.fillText(`${v.toFixed(1)}°`, hoverX + (labelRight ? -8 : 8), y - 6);
+      }
     }
   }
 
@@ -563,6 +650,16 @@ class ThermoLoopPanel extends LitElement {
         <!-- Graph -->
         <div class="graph-card">
           <canvas id="tempChart"></canvas>
+          <div class="graph-legend">
+            <span class="item ${classMap({ off: this._tempHistory.living.length === 0 })}"
+                  style="color:#03a9f4">
+              <span class="swatch"></span><span style="color:var(--primary-text-color)">Living (day)</span>
+            </span>
+            <span class="item ${classMap({ off: this._tempHistory.bedroom.length === 0 })}"
+                  style="color:#ff9800">
+              <span class="swatch dashed"></span><span style="color:var(--primary-text-color)">Bedroom (night)</span>
+            </span>
+          </div>
           <div class="range-chips">
             ${Object.entries(RANGE_LABELS).map(([key, label]) => html`
               <div class="range-chip ${classMap({ active: this._range === key })}"

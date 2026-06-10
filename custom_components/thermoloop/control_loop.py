@@ -112,16 +112,24 @@ class ControlLoop:
             try:
                 ci = self._build_input()
                 if ci is None:
+                    reason = getattr(self, "_incomplete_reason", None) or "incomplete_context"
+                    _LOGGER.debug("tick: incomplete context (%s)", reason)
                     if self._status_sensor:
-                        await self._status_sensor.update_state("error", reason="incomplete_context")
+                        await self._status_sensor.update_state("error", reason=reason)
                     return
 
                 decision = self._controller.decide(ci)
+                _LOGGER.debug(
+                    "tick: sensor=%s temp=%.2f target=%.2f mode=%s age=%.0fs -> send=%s reason=%s",
+                    self._active_sensor_id, ci.current_temp, ci.target,
+                    ci.mode.value, ci.sensor_age, decision.is_send, decision.reason,
+                )
 
                 if decision.is_send:
                     cmd = decision.command
                     success = await self._actuator.apply(cmd)
                     if success:
+                        _LOGGER.debug("tick: actuator sent %s (reason=%s)", cmd, cmd.reason)
                         self._last_command_at = ci.now
                         self._hass.bus.async_fire(
                             EVENT_THERMOLOOP_COMMAND,
@@ -145,6 +153,7 @@ class ControlLoop:
                             )
                     else:
                         # Actuator failed to send command
+                        _LOGGER.warning("tick: actuator failed to send %s", cmd)
                         if self._status_sensor:
                             await self._status_sensor.update_state("error", reason="actuator_failed")
                 else:
@@ -155,10 +164,15 @@ class ControlLoop:
                             algorithm=self._algo_name,
                             reason=decision.reason,
                         )
-            except Exception:
+            except Exception as exc:
                 _LOGGER.exception("Control tick failed")
                 if self._status_sensor:
-                    await self._status_sensor.update_state("error", reason="exception")
+                    # Surface the exception type+message so the panel/status is
+                    # self-diagnosing instead of an opaque "exception".
+                    detail = f"{type(exc).__name__}: {exc}"
+                    await self._status_sensor.update_state(
+                        "error", reason=f"exception: {detail}"[:160]
+                    )
 
     def _compute_trend(self) -> float:
         """Compute temperature trend (deg C per minute) from recent history."""
@@ -183,6 +197,7 @@ class ControlLoop:
     def _build_input(self):
         """Read HA entity states and build a ControlInput for the brain."""
         now = self._now()
+        self._incomplete_reason = None
 
         # Read night window config from entity objects (read datetime.time objects directly)
         entities = self._entities()
@@ -203,10 +218,21 @@ class ControlLoop:
             "",
             None,
         ):
+            observed = "missing" if temp_state is None else temp_state.state
+            self._incomplete_reason = f"sensor_unavailable:{active_sensor_id}={observed}"
+            _LOGGER.debug(
+                "tick aborted: %s sensor %s is %s",
+                "night" if is_night else "day", active_sensor_id, observed,
+            )
             return None
         try:
             current_temp = float(temp_state.state)
         except (ValueError, TypeError):
+            self._incomplete_reason = f"sensor_non_numeric:{active_sensor_id}={temp_state.state!r}"
+            _LOGGER.debug(
+                "tick aborted: sensor %s value %r is not numeric",
+                active_sensor_id, temp_state.state,
+            )
             return None
 
         # Read humidity from phase-appropriate sensor
