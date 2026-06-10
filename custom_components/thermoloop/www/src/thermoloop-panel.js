@@ -400,15 +400,22 @@ class ThermoLoopPanel extends LitElement {
         if (entityId === dayTargetId) { targetHistory.day = numeric(changes); continue; }
         if (entityId === nightTargetId) { targetHistory.night = numeric(changes); continue; }
         if (entityId === statusId) {
-          // Capture state + the AC commanded setpoint over time (carry the
-          // setpoint forward across points that omit attributes).
+          // Capture state + the AC commanded setpoint over time. Carry the
+          // setpoint forward across points that omit attributes, but report it
+          // only while the AC is active (null when off) so the line breaks
+          // during off periods rather than carrying a stale value.
           let lastSp = null;
           statusHistory = changes.map(c => {
             if (c.a && c.a.setpoint != null) {
               const sp = parseFloat(c.a.setpoint);
               if (!isNaN(sp)) lastSp = sp;
             }
-            return { t: (c.lu ?? c.lc) * 1000, state: c.s, setpoint: lastSp };
+            const state = c.s;
+            return {
+              t: (c.lu ?? c.lc) * 1000,
+              state,
+              setpoint: state === "active" ? lastSp : null,
+            };
           }).filter(p => p.t > 0);
           continue;
         }
@@ -607,14 +614,15 @@ class ThermoLoopPanel extends LitElement {
     // the AC's commanded setpoint over time, and the active regions.
     const targetSteps = this._buildTargetSteps(minTime, maxTime);
     const activeRegions = this._activeRegions(minTime, maxTime);
+    // Keep null entries (AC off) so the line breaks during off periods.
     const acSetpoints = (this._statusHistory || [])
-      .filter(p => p.setpoint != null && p.t >= minTime && p.t <= maxTime)
+      .filter(p => p.t >= minTime && p.t <= maxTime)
       .map(p => ({ t: p.t, v: p.setpoint }));
 
     let allTemps = [];
     for (const s of series) for (const p of s.data) allTemps.push(p.v);
     for (const p of targetSteps) allTemps.push(p.v);  // keep the target line in view
-    for (const p of acSetpoints) allTemps.push(p.v);  // and the AC setpoint line
+    for (const p of acSetpoints) if (p.v != null) allTemps.push(p.v);  // and AC setpoint
 
     const minTemp = Math.floor(Math.min(...allTemps) - 1);
     const maxTemp = Math.ceil(Math.max(...allTemps) + 1);
@@ -812,14 +820,21 @@ class ThermoLoopPanel extends LitElement {
       ctx.lineWidth = 1.5;
       ctx.setLineDash([]);
       ctx.beginPath();
-      ctx.moveTo(xScale(acSetpoints[0].t), yScale(acSetpoints[0].v));
-      for (let i = 1; i < acSetpoints.length; i++) {
-        const x = xScale(acSetpoints[i].t);
-        ctx.lineTo(x, yScale(acSetpoints[i - 1].v));  // hold previous value
-        ctx.lineTo(x, yScale(acSetpoints[i].v));      // step to new value
+      let prev = null;  // last drawn point; null lifts the pen (AC off)
+      for (const pt of acSetpoints) {
+        if (pt.v == null) { prev = null; continue; }
+        const x = xScale(pt.t), y = yScale(pt.v);
+        if (prev == null) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, prev.y);  // hold previous value
+          ctx.lineTo(x, y);       // step to new value
+        }
+        prev = { x, y };
       }
+      // Extend the final value to "now" only if the AC is currently on.
       const last = acSetpoints[acSetpoints.length - 1];
-      ctx.lineTo(xScale(maxTime), yScale(last.v));    // extend to now
+      if (last && last.v != null) ctx.lineTo(xScale(maxTime), yScale(last.v));
       ctx.stroke();
     }
 

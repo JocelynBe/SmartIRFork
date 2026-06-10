@@ -133,7 +133,11 @@ class ControlLoop:
                     reason = getattr(self, "_incomplete_reason", None) or "incomplete_context"
                     _LOGGER.debug("tick: incomplete context (%s)", reason)
                     if self._status_sensor:
-                        await self._status_sensor.update_state("error", reason=reason)
+                        await self._status_sensor.update_state(
+                            "error", reason=reason,
+                            day_sensor=self._temp_sensor_day,
+                            night_sensor=self._temp_sensor_night,
+                        )
                     return
 
                 decision = self._controller.decide(ci)
@@ -177,7 +181,11 @@ class ControlLoop:
                         # Actuator failed to send command
                         _LOGGER.warning("tick: actuator failed to send %s", cmd)
                         if self._status_sensor:
-                            await self._status_sensor.update_state("error", reason="actuator_failed")
+                            await self._status_sensor.update_state(
+                                "error", reason="actuator_failed",
+                                day_sensor=self._temp_sensor_day,
+                                night_sensor=self._temp_sensor_night,
+                            )
                 else:
                     if self._status_sensor:
                         # Reflect the actual AC state, not just "no command this
@@ -206,7 +214,9 @@ class ControlLoop:
                     # self-diagnosing instead of an opaque "exception".
                     detail = f"{type(exc).__name__}: {exc}"
                     await self._status_sensor.update_state(
-                        "error", reason=f"exception: {detail}"[:160]
+                        "error", reason=f"exception: {detail}"[:160],
+                        day_sensor=self._temp_sensor_day,
+                        night_sensor=self._temp_sensor_night,
                     )
 
     def _compute_trend(self) -> float:
