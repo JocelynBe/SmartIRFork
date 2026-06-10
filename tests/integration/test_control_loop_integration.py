@@ -18,7 +18,10 @@ class TestControlLoopIntegration:
         """Run one full tick with valid states; assert no crash and status written."""
         entry, control_loop, _ = setup_thermoloop
 
+        # Set both sensors so the test is independent of the wall clock (the
+        # night window selects day vs night sensor, and hass runs US/Pacific).
         hass.states.async_set("sensor.living_temp", "25.0")
+        hass.states.async_set("sensor.bedroom_temp", "25.0")
         await hass.async_block_till_done()
 
         await control_loop.async_tick()
@@ -36,7 +39,10 @@ class TestControlLoopIntegration:
         """tz-aware last_updated should not crash _build_input."""
         entry, control_loop, _ = setup_thermoloop
 
+        # Both sensors set (and equal) so the assertion holds whether the night
+        # window selects the day or night sensor for the current wall clock.
         hass.states.async_set("sensor.living_temp", "22.5")
+        hass.states.async_set("sensor.bedroom_temp", "22.5")
         await hass.async_block_till_done()
 
         ci = control_loop._build_input()
@@ -51,6 +57,7 @@ class TestControlLoopIntegration:
         entry, control_loop, _ = setup_thermoloop
 
         hass.states.async_set("sensor.living_temp", "25.0")
+        hass.states.async_set("sensor.bedroom_temp", "25.0")
         await hass.async_block_till_done()
 
         await control_loop.async_tick()
@@ -127,6 +134,7 @@ class TestControlLoopIntegration:
         entry, control_loop, remote_calls = setup_thermoloop
 
         hass.states.async_set("sensor.living_temp", "28.0")
+        hass.states.async_set("sensor.bedroom_temp", "28.0")
         await hass.async_block_till_done()
 
         await control_loop.async_tick()
