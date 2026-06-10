@@ -22,6 +22,7 @@ class GuardConfig:
     min_interval_s: float = 180.0  # min seconds between any two sends
     urgent_error: float = 1.5      # deg C; |error| at/above this overrides interval
     max_sensor_age_s: float = 600.0  # used by the controller, not here
+    keepalive_s: float = 900.0     # re-assert the same command at least this often
 
 
 def _same(proposed: ACCommand, state: ACState) -> bool:
@@ -84,6 +85,16 @@ def apply_guards(proposed: ACCommand, ci: ControlInput, cfg: GuardConfig) -> Dec
     error = ci.current_temp - ci.target
 
     if _same(proposed, state):
+        # We have no feedback from the AC, so the assumed state can drift from
+        # reality (a missed IR, someone using the remote, the unit auto-off).
+        # Re-assert the same command periodically so a desynced AC is corrected
+        # instead of the loop holding forever while the room runs away.
+        if (
+            proposed.power
+            and ci.last_command_at is not None
+            and (ci.now - ci.last_command_at) >= cfg.keepalive_s
+        ):
+            return Decision(proposed, f"{proposed.reason} (keep-alive)")
         return Decision(None, "hold: no change vs assumed state")
 
     # Within deadband: only allow de-escalations. Escalations are held to prevent
