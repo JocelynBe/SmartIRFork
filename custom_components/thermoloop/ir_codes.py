@@ -1,172 +1,76 @@
-"""Mitsubishi MSZ-GL18NA IR code generation for Broadlink RM4 Mini.
+"""IR code lookup for ThermoLoop.
 
-Generates raw IR timing data encoded in Broadlink's packed format,
-returned as a base64 string compatible with remote.send_command b64:.
+Resolves an ``ACCommand`` into a Broadlink Base64 IR code from the bundled
+SmartIR code database (``codes/climate/<device_code>.json``), keyed by
+mode/fan/temperature. This replaces a previous hand-rolled Mitsubishi frame
+generator whose frames the AC did not recognize; the database carries
+community-tested codes for the configured model.
 
-The MSZ-GL18NA uses the standard Mitsubishi 108-bit IR protocol:
-  Carrier: 38 kHz
-  Leader:  3400 us mark, 1750 us space
-  Bit 1:   432 us mark, 432 us space
-  Bit 0:   432 us mark, 1284 us space
-  Trailer: 432 us mark
-
-The 108-bit payload encodes power, mode, temperature, and fan speed.
+Codes are returned as plain Base64 strings — the actuator prefixes them with
+``b64:`` for ``remote.send_command``.
 """
 from __future__ import annotations
 
-import base64
-import struct
-import warnings
+import functools
+import json
+import os
 
-from custom_components.thermoloop.contracts import ACCommand, ACState, Fan, Mode
+from custom_components.thermoloop.contracts import ACCommand, Fan, Mode
 
-# Carrier and timing constants
-CARRIER_FREQ = 38000
+# Mitsubishi MSZ-GL series (Broadlink, Base64). See codes/climate/1120.json.
+# Bundling another model means dropping its <code>.json into codes/climate/ and
+# pointing DEVICE_CODE at it (or, later, a config option).
+DEVICE_CODE = 1120
 
-# Broadlink tick duration unit: ticks = round(microseconds * 269 / 8192)
-# ≈ 32.84 microseconds per tick
-def _us_to_ticks(us: float) -> int:
-    """Convert microseconds to Broadlink ticks."""
-    return int(round(us * 269 / 8192))
+_CODES_DIR = os.path.join(os.path.dirname(__file__), "codes", "climate")
 
-_LEADER_MARK = _us_to_ticks(3400)
-_LEADER_SPACE = _us_to_ticks(1750)
-_BIT1_MARK = _us_to_ticks(432)
-_BIT1_SPACE = _us_to_ticks(432)
-_BIT0_SPACE = _us_to_ticks(1284)
-_TRAILER_MARK = _us_to_ticks(432)
+_MODE_KEY = {Mode.COOL: "cool", Mode.HEAT: "heat", Mode.DRY: "dry"}
+_FAN_KEY = {Fan.LOW: "low", Fan.MID: "mid", Fan.HIGH: "high", Fan.HIGHEST: "highest"}
 
-# Mode encoding for the MSZ-GL18NA (index into NJAT protocol)
-_MODE_ENCODE = {
-    Mode.COOL: 0x04,
-    Mode.HEAT: 0x08,
-    Mode.DRY: 0x10,
-}
-
-# Fan speed encoding
-_FAN_ENCODE = {
-    Fan.LOW: 0x00,
-    Fan.MID: 0x20,
-    Fan.HIGH: 0x40,
-    Fan.HIGHEST: 0x60,
-}
+_MIN_TEMP = 16
+_MAX_TEMP = 30
 
 
-# Mitsubishi NJAT sync header (bytes 0-3 of the 14-byte payload)
-_NJAT_HEADER = b"\x23\xCB\x26\x01"
+@functools.lru_cache(maxsize=None)
+def _commands(device_code: int) -> dict:
+    """Load and cache the command table for a device code (file read once)."""
+    path = os.path.join(_CODES_DIR, f"{device_code}.json")
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)["commands"]
 
 
-def _mitsubishi_bytes(
-    power_on: bool,
-    mode: Mode,
-    temperature: int,
-    fan: Fan,
-) -> bytes:
-    """Build the 108-bit (14 byte) Mitsubishi IR packet."""
-    temp_clamped = max(16, min(31, temperature))
-    mode_val = _MODE_ENCODE.get(mode, 0x04)
-    fan_val = _FAN_ENCODE.get(fan, 0x00)
-    power_val = 0x08 if power_on else 0x00
-
-    payload = bytearray(14)
-    payload[0:4] = _NJAT_HEADER
-    payload[4] = power_val
-    payload[5] = mode_val
-    # Temperature: encoded as (temp - 16) * 2, then shifted for the protocol
-    payload[6] = (temp_clamped - 16) * 2
-    payload[7] = fan_val
-    # Bytes 8-12: timer/vane (all zero)
-    # Byte 13: checksum — sum of bytes 0-12 & 0xFF
-    payload[13] = sum(payload[:13]) & 0xFF
-
-    return bytes(payload)
+def preload(device_code: int = DEVICE_CODE) -> None:
+    """Warm the code cache off the event loop (call via executor at setup)."""
+    _commands(device_code)
 
 
-def _payload_to_bits(payload: bytes) -> list[int]:
-    """Convert payload bytes to 108-bit list (MSB first per byte)."""
-    if len(payload) != 14:
-        raise ValueError(f"Expected 14-byte payload, got {len(payload)}")
-    bits: list[int] = []
-    for byte in payload[:13]:
-        for i in range(7, -1, -1):
-            bits.append((byte >> i) & 1)
-    # Add 4 bits from byte 13 (partial byte — 108 bits = 13.5 bytes)
-    for i in range(7, 3, -1):
-        bits.append((payload[13] >> i) & 1)
-    return bits
+def generate_power_off(device_code: int = DEVICE_CODE) -> str:
+    """Return the Broadlink Base64 power-off code."""
+    return _commands(device_code)["off"]
 
 
-def _build_broadlink_packet(bits: list[int]) -> bytes:
-    """Build Broadlink raw IR packet from bit list.
+def generate(cmd: ACCommand, device_code: int = DEVICE_CODE) -> str:
+    """Resolve an ``ACCommand`` to a Broadlink Base64 IR code from the database.
 
-    Broadlink IR raw packet format:
-      byte 0: 0x26 (IR)
-      byte 1: repeat count (0x00)
-      bytes 2-3: LENGTH of payload (little-endian uint16)
-      then: timing data (one byte per timing, or 0x00 + 2 big-endian bytes if >= 256 ticks)
-      then: terminator (0x0d 0x05)
+    Temperature is clamped to the database's supported range; mode/fan fall back
+    to cool/high if an enum value has no database key.
     """
-    timings: list[int] = [_LEADER_MARK, _LEADER_SPACE]
+    if not cmd.power:
+        return generate_power_off(device_code)
+    commands = _commands(device_code)
+    mode = _MODE_KEY.get(cmd.mode, "cool")
+    fan = _FAN_KEY.get(cmd.fan, "high")
+    temp = max(_MIN_TEMP, min(_MAX_TEMP, int(round(cmd.setpoint))))
+    table = commands[mode][fan]
 
-    for bit in bits:
-        if bit:
-            timings.extend([_BIT1_MARK, _BIT1_SPACE])
-        else:
-            timings.extend([_BIT1_MARK, _BIT0_SPACE])
-
-    timings.append(_TRAILER_MARK)
-
-    # Encode timings: one byte if < 256, else 0x00 + big-endian uint16
-    data = bytearray()
-    for t in timings:
-        t = max(0, min(0xFFFF, t))
-        if t < 256:
-            data.append(t)
-        else:
-            data.append(0x00)
-            data.extend(struct.pack(">H", t))
-
-    # Append terminator
-    data.extend(b"\x0d\x05")
-
-    # Compute payload length and build final packet
-    length = len(data)
-    packet = bytearray([0x26, 0x00, length & 0xFF, (length >> 8) & 0xFF])
-    packet.extend(data)
-
-    return bytes(packet)
-
-
-def generate_power_off() -> str:
-    """Generate IR code to turn the AC off.
-    
-    mode/temp/fan fields are ignored when power=off but must be valid;
-    defaults here match typical Mitsubishi power-off frame.
-    """
-    payload = _mitsubishi_bytes(power_on=False, mode=Mode.COOL, temperature=22, fan=Fan.LOW)
-    bits = _payload_to_bits(payload)
-    packet = _build_broadlink_packet(bits)
-    return base64.b64encode(packet).decode("ascii")
-
-
-def generate(cmd: ACCommand) -> str:
-    """Generate a base64 IR code string for the given AC command."""
-    payload = _mitsubishi_bytes(
-        power_on=cmd.power,
-        mode=cmd.mode,
-        temperature=cmd.setpoint,
-        fan=cmd.fan,
-    )
-    bits = _payload_to_bits(payload)
-    packet = _build_broadlink_packet(bits)
-    return base64.b64encode(packet).decode("ascii")
-
-
-def code_to_acstate(code: str) -> dict:
-    """Readback: decode a base64 IR code into ACState fields (for testing).
-
-    Returns dict with power_on, mode, temperature, fan keys.
-    """
-    packet = base64.b64decode(code)
-    warnings.warn("code_to_acstate is heuristic — IR encoding is lossy")
-    return {}
+    code = table.get(str(temp))
+    if code:
+        return code
+    # The database can have isolated gaps (e.g. heat/low/23): use the nearest
+    # temperature that has a code rather than ever returning an empty string,
+    # which would send an invalid `b64:` to the Broadlink.
+    for delta in range(1, _MAX_TEMP - _MIN_TEMP + 1):
+        for cand in (temp - delta, temp + delta):
+            if _MIN_TEMP <= cand <= _MAX_TEMP and table.get(str(cand)):
+                return table[str(cand)]
+    return generate_power_off(device_code)

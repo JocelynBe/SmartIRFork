@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from homeassistant.const import Platform
 from homeassistant.helpers.event import async_track_state_change_event
 
+from custom_components.thermoloop import ir_codes
 from custom_components.thermoloop.actuator import Actuator
 from custom_components.thermoloop.panel import async_register_panel, async_remove_panel
 from custom_components.thermoloop.const import (
@@ -52,6 +53,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     device_tracker_entities: list[str] = entry.data.get(CONF_PRESENCE_TRACKER, [])
 
     actuator = Actuator(hass, broadlink_remote_id)
+    # Warm the IR code cache off the event loop (one-time file read).
+    await hass.async_add_executor_job(ir_codes.preload)
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {"entities": {}}

@@ -25,6 +25,9 @@ def mock_hass():
     hass.bus.async_fire = MagicMock()
     hass.http = MagicMock()
     hass.http.async_register_static_paths = AsyncMock(return_value=None)
+    # Executor jobs run the callable directly so awaited helpers (e.g. the IR
+    # code preload) behave like the real hass.
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda func, *a: func(*a))
     return hass
 
 
