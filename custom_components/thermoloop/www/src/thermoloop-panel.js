@@ -223,26 +223,60 @@ class ThermoLoopPanel extends LitElement {
     super.disconnectedCallback();
     this._disconnected = true;
     if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+    if (this._cmdUnsub) { this._cmdUnsub(); this._cmdUnsub = null; }
   }
 
   connectedCallback() {
     super.connectedCallback();
     this._discoverEntities();
-    this._fetchData();
-    // Poll so the graph + event log stay current without a manual reload
-    // (recorder history lags live state by a few seconds).
-    if (!this._pollTimer) this._pollTimer = setInterval(() => this._fetchData(), 20000);
+    this._fetchData();          // backfill graph + event log
+    this._subscribeCommands();  // live event log (every send fires an event)
+    // Poll the GRAPH only (history lags); the event log updates live via the
+    // subscription, so don't let polling clobber freshly-arrived live events.
+    if (!this._pollTimer) this._pollTimer = setInterval(() => this._fetchHistory(), 20000);
   }
 
   updated(changedProps) {
     if (changedProps.has("hass") && this.hass) {
       this._discoverEntities();
-      this._fetchData();
+      this._fetchHistory();     // keep the graph current on state changes
+      this._subscribeCommands();  // subscribe once hass/connection is available
     }
     if (changedProps.has("_tempHistory") || changedProps.has("_range")
         || changedProps.has("_smoothMin")) {
       this._renderGraph();
     }
+  }
+
+  async _subscribeCommands() {
+    if (this._cmdUnsub || this._cmdSubscribing || !this.hass || !this.hass.connection) return;
+    this._cmdSubscribing = true;
+    try {
+      this._cmdUnsub = await this.hass.connection.subscribeEvents(
+        (ev) => this._onCommandEvent(ev), "thermoloop_command");
+    } catch (e) {
+      console.warn("ThermoLoop: command event subscribe failed", e);
+    } finally {
+      this._cmdSubscribing = false;
+    }
+  }
+
+  // Live command event (one per actual IR send) -> prepend to the log.
+  _onCommandEvent(ev) {
+    const d = (ev && ev.data) || {};
+    const state = d.power === false ? "off" : "active";
+    let signal = "";
+    if (d.power !== false && d.setpoint != null) {
+      const fan = d.fan ? ` ${d.fan}` : "";
+      signal = ` ${d.mode || "cool"} ${Number(d.setpoint).toFixed(0)}°C${fan}`;
+    }
+    const reason = d.reason ? ` — ${d.reason}` : "";
+    const entry = {
+      time: new Date().toLocaleTimeString(),
+      detail: `${state}${signal}${reason}`,
+      type: "command",
+    };
+    this._events = [entry, ...this._events].slice(0, 100);
   }
 
   // --- Display helpers. ThermoLoop is Celsius-only; these stay for a single

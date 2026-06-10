@@ -160,6 +160,9 @@ class ControlLoop:
                                 "reason": cmd.reason,
                                 "mode": ci.mode.value,
                                 "target": ci.target,
+                                "power": cmd.power,
+                                "setpoint": cmd.setpoint if cmd.power else None,
+                                "fan": cmd.fan.value if cmd.power else None,
                             },
                         )
                         if self._status_sensor:
