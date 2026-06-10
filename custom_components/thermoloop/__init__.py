@@ -5,6 +5,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from homeassistant.const import Platform
+from homeassistant.helpers.event import async_track_state_change_event
 
 from custom_components.thermoloop.actuator import Actuator
 from custom_components.thermoloop.panel import async_register_panel, async_remove_panel
@@ -89,6 +90,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     control_loop.start()
 
+    # Re-tick immediately when a config entity (target/mode/algorithm) changes
+    # in the panel, instead of waiting up to the 60s interval. Entity ids are
+    # resolved from the live entity objects so id suffixes are handled.
+    async def _on_config_change(_event) -> None:
+        await control_loop.async_tick()
+
+    config_entity_ids = control_loop.config_entity_ids()
+    if config_entity_ids:
+        entry_data["unsub_config_change"] = async_track_state_change_event(
+            hass, config_entity_ids, _on_config_change
+        )
+
     # Register service
     async def handle_tick(call):
         await control_loop.async_tick()
@@ -106,6 +119,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     entry_data = hass.data[DOMAIN].get(entry.entry_id, {})
+    unsub_config_change = entry_data.get("unsub_config_change")
+    if unsub_config_change is not None:
+        unsub_config_change()
     presence = entry_data.get("presence")
     if presence is not None:
         presence.stop()

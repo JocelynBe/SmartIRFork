@@ -9,7 +9,7 @@ import inspect
 import logging
 from typing import Callable
 
-from homeassistant.core import HomeAssistant, State
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_state_change_event
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,10 +38,11 @@ class PresenceTracker:
                 self._unsubs.append(unsub)
 
     def _handle_state_change(self, event) -> None:
-        data = event.data
-        new_state: State | None = data.get("new_state")
-        if new_state is None:
-            return
+        # Recompute on every tracked change, including new_state is None: a
+        # tracker going unavailable/removed can flip the ALL-not_home verdict
+        # (e.g. the last not_home tracker disappears -> user is now present).
+        # Returning early there would leave _was_away stale and miss the
+        # away->home transition, so the loop keeps reporting away.
         now_away = self._compute_away()
         if self._was_away != now_away:
             transition = "away" if now_away else "home"

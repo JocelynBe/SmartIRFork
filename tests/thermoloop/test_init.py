@@ -70,6 +70,79 @@ async def test_async_unload_entry_removes_data(mock_hass, mock_entry):
 
 
 @pytest.mark.asyncio
+async def test_config_change_triggers_immediate_tick(mock_hass, mock_entry):
+    """Editing a config entity (number/select) must re-tick immediately.
+
+    setup wires async_track_state_change_event for the resolved config entity
+    ids; firing that event calls control_loop.async_tick().
+    """
+    from custom_components.thermoloop import async_setup_entry
+
+    captured = {}
+
+    def _fake_track(hass, entity_ids, action):
+        captured["entity_ids"] = list(entity_ids)
+        captured["action"] = action
+        return MagicMock()
+
+    # Provide resolvable entity objects so ids are read from .entity_id.
+    def _post_setup_entities():
+        entities = mock_hass.data[DOMAIN][mock_entry.entry_id]["entities"]
+        entities["target_day"] = MagicMock(entity_id="number.thermoloop_target_day")
+        entities["mode"] = MagicMock(entity_id="select.thermoloop_mode")
+
+    with patch(
+        "custom_components.thermoloop.async_track_state_change_event",
+        side_effect=_fake_track,
+    ):
+        # Populate entities right before setup wires the tracker by patching the
+        # forward-setup to install entity objects.
+        async def _forward(entry, platforms):
+            _post_setup_entities()
+        mock_hass.config_entries.async_forward_entry_setups = AsyncMock(
+            side_effect=_forward
+        )
+        await async_setup_entry(mock_hass, mock_entry)
+
+    assert "action" in captured, "config-change tracker was not registered"
+    # The resolved ids include the thermoloop config entity ids.
+    assert "number.thermoloop_target_day" in captured["entity_ids"]
+    assert "select.thermoloop_mode" in captured["entity_ids"]
+
+    # Firing the tracked event must trigger a tick.
+    control_loop = mock_hass.data[DOMAIN][mock_entry.entry_id]["control_loop"]
+    control_loop.async_tick = AsyncMock()
+    result = captured["action"](MagicMock())
+    if result is not None:
+        await result
+    control_loop.async_tick.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_unload_unsubscribes_config_change_tracker(mock_hass, mock_entry):
+    """Unsub callbacks for config-change tracking must run on unload."""
+    from custom_components.thermoloop import async_setup_entry, async_unload_entry
+
+    unsub = MagicMock()
+
+    async def _forward(entry, platforms):
+        entities = mock_hass.data[DOMAIN][mock_entry.entry_id]["entities"]
+        entities["target_day"] = MagicMock(entity_id="number.thermoloop_target_day")
+    mock_hass.config_entries.async_forward_entry_setups = AsyncMock(
+        side_effect=_forward
+    )
+
+    with patch(
+        "custom_components.thermoloop.async_track_state_change_event",
+        return_value=unsub,
+    ):
+        await async_setup_entry(mock_hass, mock_entry)
+
+    await async_unload_entry(mock_hass, mock_entry)
+    unsub.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_async_setup_domain(mock_hass, mock_entry):
     """Test that async_setup returns True."""
     from custom_components.thermoloop import async_setup

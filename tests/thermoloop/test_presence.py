@@ -115,6 +115,30 @@ def test_presence_callback_fires_on_transition(mock_evt, mock_hass):
 
 
 @patch('custom_components.thermoloop.presence.async_track_state_change_event')
+def test_presence_transition_fires_when_tracker_becomes_unavailable(mock_evt, mock_hass):
+    """home -> present recompute must fire even when new_state is None.
+
+    Bug: when a tracker's new_state is None (unavailable/removed), the handler
+    returned early and never re-evaluated presence, so an away->home transition
+    triggered by the last tracker disappearing was missed and _was_away stayed
+    stale (loop keeps reporting away).
+    """
+    cb = MagicMock()
+    # Start away: the single tracker reports not_home.
+    mock_hass.states.get.return_value = MagicMock(state="not_home")
+    tracker = PresenceTracker(mock_hass, ["device_tracker.phone1"], cb)
+    assert tracker.is_away is True
+
+    # The tracker goes unavailable: live state is now None -> present.
+    mock_hass.states.get.return_value = None
+    tracker._handle_state_change(
+        _FakeEvent("device_tracker.phone1", MagicMock(state="not_home"), None)
+    )
+    cb.assert_called_once_with("home")
+    assert tracker._was_away is False
+
+
+@patch('custom_components.thermoloop.presence.async_track_state_change_event')
 def test_presence_callback_handles_async_callback(mock_evt, mock_hass):
     """Test that async callbacks are scheduled with async_create_task."""
     # Create a callback that returns an awaitable

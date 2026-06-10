@@ -195,8 +195,8 @@ class ThermoLoopPanel extends LitElement {
     this._range = "24h";
     this._logCollapsed = false;
     this._events = [];
-    this._tempHistory = { living: [], bedroom: [] };
-    this._sensorIds = { tempDay: null, tempNight: null, status: null, mode: null, algorithm: null, dayTarget: null, nightTarget: null };
+    this._tempHistory = { living: [], bedroom: [], external: [] };
+    this._sensorIds = { tempDay: null, tempNight: null, status: null, mode: null, algorithm: null, dayTarget: null, nightTarget: null, weather: null };
     this._disconnected = false;
   }
 
@@ -221,6 +221,39 @@ class ThermoLoopPanel extends LitElement {
     }
   }
 
+  // --- Display helpers. ThermoLoop is Celsius-only; these stay for a single
+  //     formatting path and identity conversion (sensor °F is normalized to °C
+  //     in the backend, so the panel always receives Celsius). ---
+  _toDisplay(c) {
+    return c;
+  }
+
+  _fromDisplay(d) {
+    return d;
+  }
+
+  _fmtTemp(c, digits = 1) {
+    const n = typeof c === "string" ? parseFloat(c) : c;
+    if (n == null || isNaN(n)) return "—";
+    return `${n.toFixed(digits)}°C`;
+  }
+
+  // Centered moving average over a ±windowMs/2 time window (display-only).
+  _smooth(points, windowMs = 15 * 60 * 1000) {
+    if (!points || points.length === 0) return [];
+    const half = windowMs / 2;
+    const out = new Array(points.length);
+    let lo = 0, hi = 0, sum = 0;
+    for (let i = 0; i < points.length; i++) {
+      const t = points[i].t;
+      while (lo < points.length && points[lo].t < t - half) { sum -= points[lo].v; lo++; }
+      while (hi < points.length && points[hi].t <= t + half) { sum += points[hi].v; hi++; }
+      const count = hi - lo;
+      out[i] = { t, v: count > 0 ? sum / count : points[i].v };
+    }
+    return out;
+  }
+
   _discoverEntities() {
     if (!this.hass || !this.hass.states) return;
     const states = this.hass.states;
@@ -230,6 +263,17 @@ class ThermoLoopPanel extends LitElement {
       if (entityId.startsWith("select.thermoloop_algorithm")) this._sensorIds.algorithm = entityId;
       if (entityId.startsWith("number.thermoloop_target_day")) this._sensorIds.dayTarget = entityId;
       if (entityId.startsWith("number.thermoloop_target_night")) this._sensorIds.nightTarget = entityId;
+    }
+    // First weather.* entity exposing a numeric temperature attribute.
+    if (!this._sensorIds.weather) {
+      for (const entityId of Object.keys(states)) {
+        if (!entityId.startsWith("weather.")) continue;
+        const attrs = states[entityId].attributes;
+        if (attrs && !isNaN(parseFloat(attrs.temperature))) {
+          this._sensorIds.weather = entityId;
+          break;
+        }
+      }
     }
   }
 
@@ -263,23 +307,42 @@ class ThermoLoopPanel extends LitElement {
       }
     }
 
-    if (tempSensors.length === 0) return;
+    const weatherId = this._sensorIds.weather;
+    const requestedIds = weatherId ? [...tempSensors, weatherId] : [...tempSensors];
+
+    if (requestedIds.length === 0) return;
 
     try {
+      // Fetch with attributes so the weather entity's temperature attribute is
+      // available (its STATE is a condition string, not a number). Temp sensors
+      // are still parsed from c.s in the same call.
       const result = await this.hass.callWS({
         type: "history/history_during_period",
         start_time: start.toISOString(),
         end_time: now.toISOString(),
-        entity_ids: tempSensors,
-        minimal_response: true,
-        no_attributes: true,
+        entity_ids: requestedIds,
+        minimal_response: false,
+        no_attributes: false,
       });
 
       // history/history_during_period returns the compressed WS format:
-      // each point is { s: state, lu: last_updated, lc: last_changed } with
-      // timestamps in epoch SECONDS (not the verbose state/last_changed keys).
-      const history = { living: [], bedroom: [] };
+      // each point is { s: state, lu: last_updated, lc: last_changed, a: attrs }
+      // with timestamps in epoch SECONDS.
+      const history = { living: [], bedroom: [], external: [] };
       for (const [entityId, changes] of Object.entries(result)) {
+        if (entityId === weatherId) {
+          // Read temperature from the attributes, carrying forward the last
+          // known value across points that omit `a`.
+          let lastTemp = null;
+          history.external = changes.map(c => {
+            if (c.a && c.a.temperature != null) {
+              const parsed = parseFloat(c.a.temperature);
+              if (!isNaN(parsed)) lastTemp = parsed;
+            }
+            return { t: (c.lu ?? c.lc) * 1000, v: lastTemp };
+          }).filter(p => p.v != null && !isNaN(p.v) && p.t > 0);
+          continue;
+        }
         const bucket = history.living.length <= history.bedroom.length ? "living" : "bedroom";
         history[bucket] = changes.map(c => ({
           t: (c.lu ?? c.lc) * 1000,
@@ -422,14 +485,18 @@ class ThermoLoopPanel extends LitElement {
     canvas.height = h * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // Build series with time-sorted data (sorted once, reused for crosshair).
+    // Build series with time-sorted, smoothed data (sorted/smoothed once,
+    // reused for both the lines and the crosshair interpolation).
     const series = [];
     if (this._tempHistory.living.length > 0)
       series.push({ key: "living", color: "#03a9f4", label: "Living", lineDash: [],
-                    data: [...this._tempHistory.living].sort((a, b) => a.t - b.t) });
+                    data: this._smooth([...this._tempHistory.living].sort((a, b) => a.t - b.t)) });
     if (this._tempHistory.bedroom.length > 0)
       series.push({ key: "bedroom", color: "#ff9800", label: "Bedroom", lineDash: [6, 4],
-                    data: [...this._tempHistory.bedroom].sort((a, b) => a.t - b.t) });
+                    data: this._smooth([...this._tempHistory.bedroom].sort((a, b) => a.t - b.t)) });
+    if (this._tempHistory.external.length > 0)
+      series.push({ key: "external", color: "#4caf50", label: "Outdoor", lineDash: [2, 3],
+                    data: this._smooth([...this._tempHistory.external].sort((a, b) => a.t - b.t)) });
 
     if (series.length === 0 || series.every(s => s.data.length < 2)) {
       this._plot = null;
@@ -517,7 +584,7 @@ class ThermoLoopPanel extends LitElement {
     for (let i = 0; i <= 4; i++) {
       const v = minTemp + ((maxTemp - minTemp) / 4) * i;
       const y = pad.top + plotH - (plotH / 4) * i;
-      ctx.fillText(v.toFixed(1), pad.left - 6, y + 4);
+      ctx.fillText(this._toDisplay(v).toFixed(1), pad.left - 6, y + 4);
     }
 
     // X-axis labels
@@ -556,7 +623,7 @@ class ThermoLoopPanel extends LitElement {
       ctx.fillStyle = "rgba(0,0,0,0.35)";
       ctx.font = "10px sans-serif";
       ctx.textAlign = "left";
-      ctx.fillText(`Target ${target}°C`, w - pad.right - 70, targetY - 4);
+      ctx.fillText(`Target ${this._fmtTemp(target)}`, w - pad.right - 70, targetY - 4);
     }
 
     // Hover crosshair: vertical bar + interpolated colored dot/value per line
@@ -590,7 +657,7 @@ class ThermoLoopPanel extends LitElement {
         ctx.fillStyle = s.color;
         ctx.font = "bold 11px sans-serif";
         ctx.textAlign = labelRight ? "right" : "left";
-        ctx.fillText(`${v.toFixed(1)}°`, hoverX + (labelRight ? -8 : 8), y - 6);
+        ctx.fillText(`${this._toDisplay(v).toFixed(1)}°`, hoverX + (labelRight ? -8 : 8), y - 6);
       }
     }
   }
@@ -612,6 +679,13 @@ class ThermoLoopPanel extends LitElement {
     const statusTemp = this._statusValue("current_temp");
     const statusTarget = this._statusValue("target");
     const statusPresence = this._entityState(this._findEntity("select.thermoloop_mode"), "auto");
+    const outdoorTemp = this._entityAttr(this._sensorIds.weather, "temperature");
+    const dayDisplay = this._toDisplay(dayTarget);
+    const nightDisplay = this._toDisplay(nightTarget);
+    const stepTarget = (current, deltaDisplay, setter) => {
+      const next = this._fromDisplay(this._toDisplay(current) + deltaDisplay);
+      setter(next);
+    };
 
     return html`
       <div class="grid">
@@ -631,11 +705,15 @@ class ThermoLoopPanel extends LitElement {
           </div>
           <div class="status-item">
             <span class="status-label">Temperature</span>
-            <span class="status-value">${statusTemp != null ? `${statusTemp}°C` : "—"}</span>
+            <span class="status-value">${this._fmtTemp(statusTemp)}</span>
           </div>
           <div class="status-item">
             <span class="status-label">Target</span>
-            <span class="status-value">${statusTarget != null ? `${statusTarget}°C` : "—"}</span>
+            <span class="status-value">${this._fmtTemp(statusTarget)}</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">Outdoor</span>
+            <span class="status-value">${this._fmtTemp(outdoorTemp)}</span>
           </div>
           <div class="status-item">
             <span class="status-label">Algorithm</span>
@@ -658,6 +736,10 @@ class ThermoLoopPanel extends LitElement {
             <span class="item ${classMap({ off: this._tempHistory.bedroom.length === 0 })}"
                   style="color:#ff9800">
               <span class="swatch dashed"></span><span style="color:var(--primary-text-color)">Bedroom (night)</span>
+            </span>
+            <span class="item ${classMap({ off: this._tempHistory.external.length === 0 })}"
+                  style="color:#4caf50">
+              <span class="swatch dashed"></span><span style="color:var(--primary-text-color)">Outdoor</span>
             </span>
           </div>
           <div class="range-chips">
@@ -692,18 +774,18 @@ class ThermoLoopPanel extends LitElement {
           <div class="control-row">
             <span class="control-label">Day Target</span>
             <div class="stepper">
-              <button @click=${() => this._setDayTarget(dayTarget - 1)}>−</button>
-              <span>${dayTarget}°C</span>
-              <button @click=${() => this._setDayTarget(dayTarget + 1)}>+</button>
+              <button @click=${() => stepTarget(dayTarget, -1, v => this._setDayTarget(v))}>−</button>
+              <span>${this._fmtTemp(dayTarget)}</span>
+              <button @click=${() => stepTarget(dayTarget, 1, v => this._setDayTarget(v))}>+</button>
             </div>
           </div>
 
           <div class="control-row">
             <span class="control-label">Night Target</span>
             <div class="stepper">
-              <button @click=${() => this._setNightTarget(nightTarget - 1)}>−</button>
-              <span>${nightTarget}°C</span>
-              <button @click=${() => this._setNightTarget(nightTarget + 1)}>+</button>
+              <button @click=${() => stepTarget(nightTarget, -1, v => this._setNightTarget(v))}>−</button>
+              <span>${this._fmtTemp(nightTarget)}</span>
+              <button @click=${() => stepTarget(nightTarget, 1, v => this._setNightTarget(v))}>+</button>
             </div>
           </div>
         </div>

@@ -339,6 +339,106 @@ async def test_async_tick_persists_assumed_state_from_actuator(mock_hass):
     assert loop._assumed_state() == actuator.last_state
 
 
+@pytest.mark.asyncio
+async def test_async_tick_present_user_does_not_report_away(mock_hass):
+    """Regression: a present user (presence.is_away False) with Mode=auto must
+    NOT be coerced into AWAY mode, so the status reason is never the bogus
+    'hold: away, already off' while the user is physically home.
+    """
+    actuator = AsyncMock()
+    actuator.apply.return_value = True
+    # AC already off so an AWAY decision would yield "hold: away, already off".
+    actuator.last_state = ACState(power=False, mode=Mode.COOL, setpoint=22, fan=Fan.LOW)
+    status = _make_status_sensor()
+    presence = _make_presence(is_away=False)
+    loop = ControlLoop(
+        hass=mock_hass,
+        entry_id="test_entry",
+        temp_sensor_day_entity_id="sensor.living_temp",
+        temp_sensor_night_entity_id="sensor.bedroom_temp",
+        actuator=actuator,
+        presence=presence,
+        status_sensor=status,
+    )
+
+    def _get_state(entity_id):
+        if entity_id == "sensor.living_temp":
+            return MagicMock(state="22.1", last_updated=datetime(2024, 1, 1, 13, 59, 0))
+        return None
+    mock_hass.states.get = _get_state
+
+    mock_hass.data[DOMAIN]["test_entry"]["entities"] = {
+        "target_day": FakeEntity(native_value=22.0),
+        "target_night": FakeEntity(native_value=24.0),
+        "mode": FakeEntity(current_option="auto"),
+        "algorithm": FakeEntity(current_option="v0"),
+        "night_start": FakeEntity(native_value=dt.time(22, 0)),
+        "night_end": FakeEntity(native_value=dt.time(7, 0)),
+    }
+
+    with patch.object(loop, "_now", return_value=datetime(2024, 1, 1, 14, 0, 0)):
+        await loop.async_tick()
+
+    status.update_state.assert_called()
+    for call in status.update_state.call_args_list:
+        reason = call.kwargs.get("reason", "")
+        assert "away" not in reason, f"present user reported away: {reason!r}"
+
+
+@pytest.mark.asyncio
+async def test_async_tick_idle_populates_status_fields(mock_hass):
+    """On an idle (hold) tick the status must still carry active_sensor,
+    current_temp, target and humidity so the panel doesn't show '—'.
+    """
+    actuator = AsyncMock()
+    # Assumed state already off and matching -> controller/guards hold (idle).
+    actuator.last_state = ACState(power=False, mode=Mode.COOL, setpoint=22, fan=Fan.LOW)
+    status = _make_status_sensor()
+    presence = _make_presence(is_away=False)
+    loop = ControlLoop(
+        hass=mock_hass,
+        entry_id="test_entry",
+        temp_sensor_day_entity_id="sensor.living_temp",
+        temp_sensor_night_entity_id="sensor.bedroom_temp",
+        actuator=actuator,
+        presence=presence,
+        status_sensor=status,
+        humidity_sensor_day_entity_id="sensor.living_humidity",
+    )
+
+    def _get_state(entity_id):
+        if entity_id == "sensor.living_temp":
+            return MagicMock(state="22.1", last_updated=datetime(2024, 1, 1, 13, 59, 0))
+        if entity_id == "sensor.living_humidity":
+            return MagicMock(state="55.0", last_updated=datetime(2024, 1, 1, 13, 59, 0))
+        return None
+    mock_hass.states.get = _get_state
+
+    mock_hass.data[DOMAIN]["test_entry"]["entities"] = {
+        "target_day": FakeEntity(native_value=22.0),
+        "target_night": FakeEntity(native_value=24.0),
+        "mode": FakeEntity(current_option="auto"),
+        "algorithm": FakeEntity(current_option="v0"),
+        "night_start": FakeEntity(native_value=dt.time(22, 0)),
+        "night_end": FakeEntity(native_value=dt.time(7, 0)),
+    }
+
+    with patch.object(loop, "_now", return_value=datetime(2024, 1, 1, 14, 0, 0)):
+        await loop.async_tick()
+
+    # The (single) update must be an idle one carrying the live reading fields.
+    idle_calls = [
+        c for c in status.update_state.call_args_list
+        if c.args and c.args[0] == "idle"
+    ]
+    assert idle_calls, "expected an idle status update"
+    kwargs = idle_calls[-1].kwargs
+    assert kwargs.get("active_sensor") == "sensor.living_temp"
+    assert kwargs.get("current_temp") == 22.1
+    assert kwargs.get("target") == 22.0
+    assert kwargs.get("humidity") == 55.0
+
+
 def test_night_window_active():
     now = datetime(2024, 1, 1, 23, 0, 0)
     assert _night_window_active(now, dt.time(22, 0), dt.time(7, 0)) is True
@@ -356,3 +456,59 @@ def test_night_window_invalid_returns_false():
     assert _night_window_active(now, None, None) is False
     assert _night_window_active(now, None, dt.time(22, 0)) is False
     assert _night_window_active(now, dt.time(22, 0), None) is False
+
+
+def _loop_with_temp(mock_hass, state, unit):
+    """Build a loop whose day sensor returns `state` with `unit`, plus config."""
+    actuator = AsyncMock()
+    actuator.last_state = ACState(power=False, mode=Mode.COOL, setpoint=22, fan=Fan.LOW)
+    loop = ControlLoop(
+        hass=mock_hass,
+        entry_id="test_entry",
+        temp_sensor_day_entity_id="sensor.living_temp",
+        temp_sensor_night_entity_id="sensor.bedroom_temp",
+        actuator=actuator,
+        presence=_make_presence(),
+        status_sensor=_make_status_sensor(),
+    )
+
+    def _get_state(entity_id):
+        if entity_id == "sensor.living_temp":
+            return MagicMock(
+                state=state,
+                last_updated=datetime(2024, 1, 1, 13, 59, 0),
+                attributes={"unit_of_measurement": unit},
+            )
+        return None
+    mock_hass.states.get = _get_state
+    mock_hass.data[DOMAIN]["test_entry"]["entities"] = {
+        "target_day": FakeEntity(native_value=22.0),
+        "target_night": FakeEntity(native_value=24.0),
+        "mode": FakeEntity(current_option="auto"),
+        "algorithm": FakeEntity(current_option="v0"),
+        "night_start": FakeEntity(native_value=dt.time(22, 0)),
+        "night_end": FakeEntity(native_value=dt.time(7, 0)),
+    }
+    return loop
+
+
+def test_build_input_normalizes_fahrenheit_to_celsius(mock_hass):
+    """A sensor reporting °F is converted to °C before any control reasoning.
+
+    Without this, a 70°F room reads as 70°C and the loop slam-cools against a
+    ~22°C target.
+    """
+    loop = _loop_with_temp(mock_hass, state="70.0", unit="°F")
+    with patch.object(loop, "_now", return_value=datetime(2024, 1, 1, 14, 0, 0)):
+        ci = loop._build_input()
+    assert ci is not None
+    assert ci.current_temp == pytest.approx((70.0 - 32) * 5 / 9, abs=0.01)  # 21.11°C
+
+
+def test_build_input_celsius_sensor_unchanged(mock_hass):
+    """A °C sensor passes through unconverted."""
+    loop = _loop_with_temp(mock_hass, state="25.0", unit="°C")
+    with patch.object(loop, "_now", return_value=datetime(2024, 1, 1, 14, 0, 0)):
+        ci = loop._build_input()
+    assert ci is not None
+    assert ci.current_temp == pytest.approx(25.0)

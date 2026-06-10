@@ -103,6 +103,24 @@ class ControlLoop:
             self._unsub_interval()
             self._unsub_interval = None
 
+    def config_entity_ids(self) -> list[str]:
+        """Resolve the entity_ids of the editable config entities to watch.
+
+        Reads ``.entity_id`` from the live entity objects (the number.* targets
+        and select.* mode/algorithm) so id suffixes are handled automatically
+        rather than hardcoded. Entities without a resolvable id are skipped.
+        Used to wire immediate re-ticks when the panel edits a config value.
+        """
+        keys = ("target_day", "target_night", "mode", "algorithm")
+        entities = self._entities()
+        ids: list[str] = []
+        for key in keys:
+            ent = entities.get(key)
+            entity_id = getattr(ent, "entity_id", None) if ent is not None else None
+            if entity_id:
+                ids.append(entity_id)
+        return ids
+
     async def _async_tick_wrapper(self, _now=None) -> None:
         await self.async_tick()
 
@@ -162,6 +180,10 @@ class ControlLoop:
                             "idle",
                             mode=ci.mode.value,
                             algorithm=self._algo_name,
+                            target=ci.target,
+                            active_sensor=self._active_sensor_id,
+                            current_temp=ci.current_temp,
+                            humidity=self._current_humidity,
                             reason=decision.reason,
                         )
             except Exception as exc:
@@ -234,6 +256,14 @@ class ControlLoop:
                 active_sensor_id, temp_state.state,
             )
             return None
+
+        # Normalize the reading to Celsius. ThermoLoop reasons entirely in
+        # degrees C (targets, deadband, IR setpoints), but a sensor may report
+        # in Fahrenheit (unit_of_measurement "°F"); without converting, a 70°F
+        # room reads as 70°C and the loop slam-cools against a ~22°C target.
+        temp_unit = (temp_state.attributes or {}).get("unit_of_measurement")
+        if isinstance(temp_unit, str) and temp_unit.strip().upper().endswith("F"):
+            current_temp = (current_temp - 32.0) * 5.0 / 9.0
 
         # Read humidity from phase-appropriate sensor
         humidity_entity = self._humidity_night if is_night else self._humidity_day
